@@ -1,10 +1,12 @@
 # --------------------------------------------------------
-# MEDiC: Custom MMCV utilities
+# MEDiC: Masked Encoder-Decoder with soft Mixture-of-Experts
+# Custom MMCV utilities
 # --------------------------------------------------------
 
 import torch
 
 # Fix PyTorch 2.6+ weights_only default change
+# mmcv's checkpoint loading doesn't pass weights_only, causing failures
 _original_torch_load = torch.load
 
 def _patched_torch_load(*args, **kwargs):

@@ -1,5 +1,5 @@
 # --------------------------------------------------------
-# MEDiC: Masked Encoder Distillation Components
+# MEDiC: Masked Encoder-Decoder with soft Mixture-of-Experts
 # Semantic Segmentation Backbone Adapter
 # Based on BEiT and CAE implementations
 # --------------------------------------------------------
@@ -26,7 +26,7 @@ except ImportError:
 class MEDiC(nn.Module):
     """MEDiC backbone adapter for semantic segmentation.
 
-    This adapter wraps the pretrained VisionTransformerMIM model
+    This adapter wraps the pretrained MEDiC VisionTransformerMIM model
     and adds FPN layers to produce multi-scale features for dense prediction.
 
     Args:
@@ -47,9 +47,52 @@ class MEDiC(nn.Module):
         use_rel_pos_bias (bool): Use relative position bias. Default: True
         use_shared_rel_pos_bias (bool): Share rel pos bias across layers. Default: True
         use_checkpoint (bool): Use gradient checkpointing. Default: False
+        use_soft_moe (bool): Use Mixture-of-Experts. Default: False
+        moe_num_experts (int): Number of experts. Default: 2
+        moe_slots_per_expert (int): Slots per expert. Default: 1
+        moe_mlp_ratio (float): MLP ratio for MoE blocks. Default: None (use mlp_ratio)
+        moe_placement (str): MoE placement strategy. Default: "alternating"
         out_indices (list): Indices of blocks to output features. Default: [3, 5, 7, 11]
         out_with_norm (bool): Apply norm before output. Default: False
     """
+
+    @staticmethod
+    def _load_checkpoint_config(pretrained_path):
+        """Load configuration from checkpoint folder BEFORE creating backbone.
+
+        This is critical for MoE models: the architecture must be configured
+        correctly BEFORE VisionTransformerMIM is instantiated, because the
+        MoE blocks are created during __init__ and cannot be changed after.
+
+        Args:
+            pretrained_path (str): Path to pretrained checkpoint file
+
+        Returns:
+            dict: Student configuration from checkpoint, or empty dict if not found
+        """
+        import os
+        import glob
+        import yaml
+
+        if pretrained_path is None:
+            return {}
+
+        checkpoint_folder = os.path.dirname(pretrained_path)
+        config_files = glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
+
+        if not config_files:
+            print(f"Warning: No config file found in {checkpoint_folder}")
+            return {}
+
+        try:
+            with open(config_files[0], 'r') as f:
+                cfg = yaml.safe_load(f)
+            student_cfg = cfg.get("model", {}).get("student", {})
+            print(f"Loaded checkpoint config from {config_files[0]}")
+            return student_cfg
+        except Exception as e:
+            print(f"Warning: Failed to load config from {config_files[0]}: {e}")
+            return {}
 
     def __init__(self,
                  img_size=224,
@@ -69,6 +112,12 @@ class MEDiC(nn.Module):
                  use_rel_pos_bias=True,
                  use_shared_rel_pos_bias=True,
                  use_checkpoint=False,
+                 # MoE parameters
+                 use_soft_moe=False,
+                 moe_num_experts=2,
+                 moe_slots_per_expert=1,
+                 moe_mlp_ratio=None,
+                 moe_placement="alternating",
                  # Output parameters
                  out_indices=[3, 5, 7, 11],
                  out_with_norm=False,
@@ -79,10 +128,61 @@ class MEDiC(nn.Module):
         # Import VisionTransformerMIM from MEDiC codebase
         import sys
         import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from src.models.vision_transformer import VisionTransformerMIM
+        medic_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        if medic_root not in sys.path:
+            sys.path.insert(0, medic_root)
+        from src.models.vision_transformer_mim import VisionTransformerMIM
+
+        # =====================================================================
+        # CRITICAL FIX: Load checkpoint config BEFORE creating backbone
+        # =====================================================================
+        # For MoE models, the architecture (which blocks have SoftMoELayer vs MLP)
+        # is determined at construction time. If we build with use_soft_moe=False
+        # and then try to load MoE weights, all expert weights will be discarded!
+        #
+        # This fix loads the config from the checkpoint folder FIRST, then uses
+        # those values to configure the backbone correctly.
+        # =====================================================================
+        if pretrained is not None:
+            checkpoint_cfg = self._load_checkpoint_config(pretrained)
+            if checkpoint_cfg:
+                # Override MoE parameters with checkpoint config
+                # This ensures architecture matches the pretrained weights
+                cfg_use_soft_moe = checkpoint_cfg.get("use_soft_moe", use_soft_moe)
+                cfg_moe_num_experts = checkpoint_cfg.get("moe_num_experts", moe_num_experts)
+                cfg_moe_slots_per_expert = checkpoint_cfg.get("moe_slots_per_expert", moe_slots_per_expert)
+                cfg_moe_mlp_ratio = checkpoint_cfg.get("moe_mlp_ratio", moe_mlp_ratio)
+                cfg_moe_placement = checkpoint_cfg.get("moe_placement", moe_placement)
+
+                # Also load ALL position embedding config from checkpoint
+                # This is critical - we must match the checkpoint's position embedding type
+                cfg_use_abs_pos_emb = checkpoint_cfg.get("use_abs_pos_emb", use_abs_pos_emb)
+                cfg_use_sincos_pos_emb = checkpoint_cfg.get("use_sincos_pos_emb", use_sincos_pos_emb)
+                cfg_use_rel_pos_bias = checkpoint_cfg.get("use_rel_pos_bias", use_rel_pos_bias)
+
+                # Log if MoE settings are being applied
+                if cfg_use_soft_moe:
+                    print(f"[MEDiC Backbone] Configuring MoE architecture from checkpoint:")
+                    print(f"  - use_soft_moe: {cfg_use_soft_moe}")
+                    print(f"  - moe_num_experts: {cfg_moe_num_experts}")
+                    print(f"  - moe_placement: {cfg_moe_placement}")
+
+                # Log position embedding configuration
+                print(f"[MEDiC Backbone] Position embedding config from checkpoint:")
+                print(f"  - use_abs_pos_emb: {cfg_use_abs_pos_emb}")
+                print(f"  - use_sincos_pos_emb: {cfg_use_sincos_pos_emb}")
+                print(f"  - use_rel_pos_bias: {cfg_use_rel_pos_bias}")
+
+                # Use checkpoint config values
+                use_soft_moe = cfg_use_soft_moe
+                moe_num_experts = cfg_moe_num_experts
+                moe_slots_per_expert = cfg_moe_slots_per_expert
+                moe_mlp_ratio = cfg_moe_mlp_ratio
+                moe_placement = cfg_moe_placement
+                # NOTE: Do NOT override position embedding settings from pretrain config.
+                # The mmseg config specifies the correct position embedding type for
+                # downstream (use_rel_pos_bias=True → converted to sincos for segmentation).
+                # Overriding from pretrain config breaks eval of trained checkpoints.
 
         # =====================================================================
         # POSITION EMBEDDING HANDLING FOR SEGMENTATION
@@ -99,7 +199,7 @@ class MEDiC(nn.Module):
         # image sizes, which is exactly what we need for segmentation at 512x512.
         # =====================================================================
         if use_rel_pos_bias:
-            # Use per-layer relative position bias for segmentation.
+            # For segmentation, use per-layer relative position bias (not shared).
             # During training: init_weights() converts shared→per-layer via interpolation.
             # During eval: the semseg checkpoint already has per-layer tables.
             print(f"[MEDiC Backbone] Using per-layer relative position bias for segmentation")
@@ -107,7 +207,7 @@ class MEDiC(nn.Module):
             actual_use_abs = False
             actual_use_rel_pos = True
         elif use_abs_pos_emb:
-            print(f"[MEDiC Backbone] Using absolute position embeddings (interpolated)")
+            print(f"[MEDiC Backbone] Using absolute position embeddings (interpolated 14x14 → 32x32)")
             actual_use_sincos = False
             actual_use_abs = True
             actual_use_rel_pos = False
@@ -116,7 +216,7 @@ class MEDiC(nn.Module):
             actual_use_abs = False
             actual_use_rel_pos = False
 
-        # Create the backbone model
+        # Create the backbone model with CORRECT architecture from checkpoint
         self.backbone = VisionTransformerMIM(
             img_size=img_size,
             patch_size=patch_size,
@@ -132,12 +232,18 @@ class MEDiC(nn.Module):
             init_values=init_values,
             use_abs_pos_emb=actual_use_abs,
             use_sincos_pos_emb=actual_use_sincos,
-            use_rel_pos_bias=actual_use_rel_pos,
+            use_rel_pos_bias=actual_use_rel_pos,  # Per-layer bias for semseg, not shared
             use_shared_rel_pos_bias=False,
-            # use_mask_tokens=True when using rel_pos_bias (ViT validation requires it).
-            # Semseg doesn't use masking, but this avoids the validation error.
+            # use_mask_tokens=True when using rel_pos_bias (validation requires it).
+            # Semseg doesn't use masking, but mask_tokens=True avoids the validation error.
+            # The mask token parameter will just be unused.
             use_mask_tokens=actual_use_rel_pos,
-            num_classes=0,
+            use_soft_moe=use_soft_moe,
+            moe_num_experts=moe_num_experts,
+            moe_slots_per_expert=moe_slots_per_expert,
+            moe_mlp_ratio=moe_mlp_ratio,
+            moe_placement=moe_placement,
+            num_classes=0,  # No classification head
         )
 
         self.num_features = self.embed_dim = embed_dim
@@ -195,6 +301,10 @@ class MEDiC(nn.Module):
 
         Args:
             pretrained (str, optional): Path to pre-trained MEDiC checkpoint.
+
+        Note:
+            MoE configuration is now loaded in __init__() BEFORE the backbone
+            is created. This method only handles weight loading and validation.
         """
         if isinstance(pretrained, str):
             if load_checkpoint is not None:
@@ -211,6 +321,12 @@ class MEDiC(nn.Module):
                         logger.warning(msg)
                     else:
                         print(f"WARNING: {msg}")
+
+                def log_error(msg):
+                    if logger is not None:
+                        logger.error(msg)
+                    else:
+                        print(f"ERROR: {msg}")
 
                 # Load checkpoint with strict=False to allow missing FPN weights
                 # PyTorch 2.6 fix: set weights_only=False for numpy compatibility
@@ -273,19 +389,73 @@ class MEDiC(nn.Module):
 
                     student_state_dict[new_key] = v
 
+                # =====================================================================
+                # ARCHITECTURE MISMATCH VALIDATION
+                # =====================================================================
+                # Check if checkpoint contains MoE weights but model doesn't have MoE
+                # This catches the critical bug where MoE weights would be silently discarded
+                checkpoint_has_moe = any(
+                    'experts' in k or 'mlp.phi' in k or 'mlp.scale' in k
+                    for k in student_state_dict.keys()
+                )
+                model_has_moe = getattr(self.backbone, 'use_soft_moe', False)
+
+                if checkpoint_has_moe and not model_has_moe:
+                    moe_keys = [k for k in student_state_dict.keys()
+                               if 'experts' in k or 'mlp.phi' in k or 'mlp.scale' in k]
+                    log_error("=" * 70)
+                    log_error("CRITICAL ARCHITECTURE MISMATCH DETECTED!")
+                    log_error("=" * 70)
+                    log_error(f"Checkpoint contains {len(moe_keys)} MoE weight keys:")
+                    for key in moe_keys[:10]:  # Show first 10
+                        log_error(f"  - {key}")
+                    if len(moe_keys) > 10:
+                        log_error(f"  ... and {len(moe_keys) - 10} more MoE keys")
+                    log_error("")
+                    log_error("BUT the model was built with use_soft_moe=False!")
+                    log_error("All MoE weights will be DISCARDED, causing:")
+                    log_error("  - 50% of MLP capacity using random weights")
+                    log_error("  - Significant performance degradation")
+                    log_error("")
+                    log_error("This should not happen with the fixed code.")
+                    log_error("Please check that _load_checkpoint_config() found the config file.")
+                    log_error("=" * 70)
+                    raise ValueError(
+                        f"Architecture mismatch: checkpoint has MoE ({len(moe_keys)} keys) "
+                        f"but model built without MoE. This would discard all expert weights!"
+                    )
+
                 # Load with strict=False (FPN weights will be randomly initialized)
                 msg = self.load_state_dict(student_state_dict, strict=False)
 
-                # Log loading results
+                # =====================================================================
+                # DETAILED UNEXPECTED KEY LOGGING
+                # =====================================================================
                 log_info(f"Loaded pretrained MEDiC from: {pretrained}")
                 log_info(f"Missing keys: {len(msg.missing_keys)}")
                 log_info(f"Unexpected keys: {len(msg.unexpected_keys)}")
 
-                # Log unexpected keys (usually position bias related)
+                # Check for MoE keys in unexpected (safety check)
                 if msg.unexpected_keys:
-                    log_info(f"Unexpected keys (usually rel_pos_bias, expected): {len(msg.unexpected_keys)}")
-                    for key in msg.unexpected_keys[:5]:
-                        log_info(f"  - {key}")
+                    moe_unexpected = [k for k in msg.unexpected_keys
+                                     if 'expert' in k or 'phi' in k or 'mlp.scale' in k]
+                    if moe_unexpected:
+                        log_error("=" * 70)
+                        log_error(f"WARNING: {len(moe_unexpected)} MoE keys were NOT loaded!")
+                        log_error("=" * 70)
+                        for key in moe_unexpected[:10]:
+                            log_error(f"  - {key}")
+                        if len(moe_unexpected) > 10:
+                            log_error(f"  ... and {len(moe_unexpected) - 10} more")
+                        log_error("This indicates an architecture mismatch that was not caught earlier.")
+                        log_error("=" * 70)
+
+                    # Log non-MoE unexpected keys (usually position bias related)
+                    other_unexpected = [k for k in msg.unexpected_keys if k not in moe_unexpected]
+                    if other_unexpected:
+                        log_info(f"Other unexpected keys (usually rel_pos_bias, expected): {len(other_unexpected)}")
+                        for key in other_unexpected[:5]:
+                            log_info(f"  - {key}")
 
                 # Log expected missing keys (FPN layers)
                 if msg.missing_keys:
@@ -297,6 +467,12 @@ class MEDiC(nn.Module):
                         log_warning(f"Non-FPN missing keys (may need attention): {len(other_missing)}")
                         for key in other_missing[:5]:
                             log_warning(f"  - {key}")
+
+                # Final confirmation of MoE status
+                if model_has_moe:
+                    log_info(f"✓ Model built with MoE (use_soft_moe=True)")
+                    log_info(f"  - Experts: {getattr(self.backbone, 'moe_num_experts', 'N/A')}")
+                    log_info(f"  - Placement: {getattr(self.backbone, 'moe_placement', 'N/A')}")
 
             else:
                 print(f"Warning: mmcv not available. Cannot load checkpoint: {pretrained}")
