@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-knn
+#SBATCH -J explore-knn
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -12,7 +12,7 @@
 #SBATCH --signal=SIGUSR1@90
 
 # ────────────────────────────────
-# MEDiC k-NN Evaluation
+# ExPLoRe k-NN Evaluation
 # Expected result: ~75.0% top-1 (k=20)
 # ────────────────────────────────
 
@@ -50,7 +50,7 @@ echo "Run started at: $(date)"
 # Configuration
 WEIGHTS_FOLDER="${1:?Usage: sbatch scripts/eval_knn.sh <checkpoint_folder> <epoch>}"
 EPOCH=${2:-290}
-CONFIG="configs/pretrain_medic.yaml"
+CONFIG="configs/pretrain_explore_2exp.yaml"
 
 # ────────────────────────────────
 srun torchrun \

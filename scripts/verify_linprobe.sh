@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-verify-lp
+#SBATCH -J explore-verify-lp
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -11,7 +11,7 @@
 #SBATCH --output=logs/verify/linprobe_%j.out
 #SBATCH --error=logs/verify/linprobe_%j.err
 
-# MEDiC Linear Probe Verification - 1 epoch, 1 GPU
+# ExPLoRe Linear Probe Verification - 1 epoch, 1 GPU
 # Verifies: checkpoint loading, feature extraction, linear head training
 set -e
 
@@ -30,7 +30,7 @@ export MASTER_ADDR=$(hostname -s)
 export MASTER_PORT=$(shuf -i 20000-65000 -n 1)
 
 echo "================================================================"
-echo "MEDiC Linear Probe Verification (1 epoch)"
+echo "ExPLoRe Linear Probe Verification (1 epoch)"
 echo "Checkpoint: ${PRETRAINED}"
 echo "================================================================"
 

@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-verify-seg
+#SBATCH -J explore-verify-seg
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -11,7 +11,7 @@
 #SBATCH --output=logs/verify/semseg_%j.out
 #SBATCH --error=logs/verify/semseg_%j.err
 
-# MEDiC Semseg Verification - 1000 iters, 1 GPU
+# ExPLoRe Semseg Verification - 1000 iters, 1 GPU
 # Verifies: backbone loading, FPN features, UPerNet training loop
 set -e
 
@@ -29,7 +29,7 @@ export PYTHONPATH="${SEMSEG_DIR}:${SLURM_SUBMIT_DIR}"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
 echo "================================================================"
-echo "MEDiC Semseg Verification (1000 iters)"
+echo "ExPLoRe Semseg Verification (1000 iters)"
 echo "Checkpoint: ${PRETRAINED}"
 echo "ADE20K: ${ADE20K_ROOT}"
 echo "================================================================"
@@ -38,7 +38,7 @@ cd "${SEMSEG_DIR}" || exit 1
 
 # Use training config but override to 1000 iters
 python tools/train.py \
-  "configs/medic/upernet_medic_base_512_160k_ade20k.py" \
+  "src/downstream/segmentation/configs/medic/upernet_medic_base_512_160k_ade20k.py" \
   --work-dir "/tmp/medic_verify_semseg_${SLURM_JOB_ID}" \
   --options \
     model.backbone.pretrained="${PRETRAINED}" \

@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-smoke-train
+#SBATCH -J explore-smoke-train
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -11,7 +11,7 @@
 #SBATCH --output=logs/smoke_train_%j.out
 #SBATCH --error=logs/smoke_train_%j.err
 
-# MEDiC Real-Data Training Smoke Test
+# ExPLoRe Real-Data Training Smoke Test
 # Runs 2 epochs on 5 images/class subset (~5000 images) with pretrain_medic.yaml
 # Tests: data loading, masking, multi-loss, checkpointing, W&B logging, validation
 
@@ -23,7 +23,7 @@ module load cudnn/8.9.4-binary
 cd "${SLURM_SUBMIT_DIR}" || exit 1
 
 echo "================================================================"
-echo "MEDiC Real-Data Training Smoke Test"
+echo "ExPLoRe Real-Data Training Smoke Test"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 echo "SLURM Job: $SLURM_JOB_ID"
 echo "================================================================"
@@ -36,7 +36,7 @@ export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export MASTER_ADDR=$(hostname -s)
 export MASTER_PORT=$(shuf -i 20000-65000 -n 1)
 
-CONFIG="configs/pretrain_medic_smoke.yaml"
+CONFIG="configs/pretrain_explore_smoke.yaml"
 
 # Override subset and batch size for smoke test
 # subset=5 -> 5 images/class -> 5000 total -> ~78 steps/epoch with batch=64

@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-verify-ft
+#SBATCH -J explore-verify-ft
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
@@ -11,7 +11,7 @@
 #SBATCH --output=logs/verify/finetune_%j.out
 #SBATCH --error=logs/verify/finetune_%j.err
 
-# MEDiC Finetune Verification - 1 epoch, 1 GPU
+# ExPLoRe Finetune Verification - 1 epoch, 1 GPU
 # Verifies: checkpoint loading, weight extraction, training loop
 set -e
 
@@ -30,7 +30,7 @@ export MASTER_ADDR=$(hostname -s)
 export MASTER_PORT=$(shuf -i 20000-65000 -n 1)
 
 echo "================================================================"
-echo "MEDiC Finetune Verification (1 epoch)"
+echo "ExPLoRe Finetune Verification (1 epoch)"
 echo "Checkpoint: ${PRETRAINED}"
 echo "================================================================"
 

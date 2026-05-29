@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=medic-smoke
+#SBATCH --job-name=explore-smoke
 #SBATCH -A isaac-utk0256
 #SBATCH --qos=ai-tenn
 #SBATCH --partition=ai-tenn
@@ -13,7 +13,7 @@
 #SBATCH --output=logs/smoke_test_%j.out
 #SBATCH --error=logs/smoke_test_%j.err
 
-# MEDiC GPU Smoke Test
+# ExPLoRe GPU Smoke Test
 # Tests all 4 config variants with real CLIP teacher, bf16, synthetic data
 # Usage: sbatch scripts/smoke_test.sh
 
@@ -25,7 +25,7 @@ module load cudnn/8.9.4-binary
 cd "${SLURM_SUBMIT_DIR}" || exit 1
 
 echo "================================================================"
-echo "MEDiC GPU Smoke Test"
+echo "ExPLoRe GPU Smoke Test"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
 echo "SLURM Job: ${SLURM_JOB_ID:-none}"
 echo "================================================================"

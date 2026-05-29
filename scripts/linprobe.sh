@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-linprobe
+#SBATCH -J explore-linprobe
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -11,7 +11,7 @@
 #SBATCH --output=logs/linprobe/%x/%j.log
 #SBATCH --signal=SIGUSR1@90
 
-# MEDiC linear probe evaluation on ImageNet-1K: 90 epochs, 4 GPUs
+# ExPLoRe linear probe evaluation on ImageNet-1K: 90 epochs, 4 GPUs
 # Expected: ~81.2% top-1 accuracy
 # Usage: sbatch scripts/linprobe.sh <pretrained_checkpoint>
 

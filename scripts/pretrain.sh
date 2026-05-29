@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-pretrain
+#SBATCH -J explore-pretrain
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -11,7 +11,7 @@
 #SBATCH --output=logs/pretrain/%x/%j.log
 #SBATCH --signal=SIGUSR1@90
 
-# MEDiC pretraining: ViT-Base, 300 epochs, 4 GPUs
+# ExPLoRe pretraining: ViT-Base, 300 epochs, 4 GPUs
 # Usage: sbatch scripts/pretrain.sh [config_path]
 #   Default: configs/pretrain_explore_2exp.yaml (block masking 40%, dense encoding)
 

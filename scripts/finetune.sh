@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH -J medic-finetune
+#SBATCH -J explore-finetune
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -11,7 +11,7 @@
 #SBATCH --output=logs/finetune/%x/%j.log
 #SBATCH --signal=SIGUSR1@90
 
-# MEDiC end-to-end finetuning on ImageNet-1K: 100 epochs, 4 GPUs
+# ExPLoRe end-to-end finetuning on ImageNet-1K: 100 epochs, 4 GPUs
 # Expected: ~85.0% top-1 accuracy
 # Usage: sbatch scripts/finetune.sh <pretrained_checkpoint>
 

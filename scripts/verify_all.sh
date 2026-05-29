@@ -1,5 +1,5 @@
 #!/bin/bash
-# MEDiC End-to-End Verification Script
+# ExPLoRe End-to-End Verification Script
 # Submits all verification jobs: kNN, finetune (1 epoch), linprobe (1 epoch),
 # semseg (1000 iters), detection (1 epoch), and pretrain smoke test.
 #
@@ -26,7 +26,7 @@ COCO="/path/to/coco"
 mkdir -p logs/knn/medic-knn logs/verify
 
 echo "================================================================"
-echo "MEDiC End-to-End Verification"
+echo "ExPLoRe End-to-End Verification"
 echo "================================================================"
 
 # 1. kNN eval (full run, verify exact numbers)
