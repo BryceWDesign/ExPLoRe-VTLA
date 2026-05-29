@@ -85,7 +85,7 @@ class MultiBlockWeightAggregator(nn.Module):
         raise RuntimeError(f"Unknown strategy: {self.strategy}")
 
 
-class MEDiC_Model(nn.Module):
+class MEDiCModel(nn.Module):
     """
     A unified model for MEDiC that encapsulates the student, distillation head,
     and pixel decoder to simplify DDP wrapping.
@@ -172,33 +172,6 @@ class MEDiC_Model(nn.Module):
         self.pixel_decoder: Optional[nn.Module] = None
         if losses_cfg.get("use_decoder_loss", False):
             self.pixel_decoder = build_pixel_decoder(cfg)
-
-        # Initialize GradNorm buffers if GradNorm is enabled
-        # This is cleaner than lazy initialization during forward pass
-        if losses_cfg.get("loss_weighting_method") == "gradnorm":
-            # Count the number of active losses
-            num_losses = 0
-            if losses_cfg.get("use_head_loss", True):
-                num_losses += 1
-            if losses_cfg.get("use_cls_loss", False):
-                num_losses += 1
-            if losses_cfg.get("use_decoder_loss", False):
-                num_losses += 1
-
-            # Only initialize if we have multiple losses (GradNorm is for balancing)
-            if num_losses > 1:
-                # Register GradNorm buffers (not parameters - updated manually)
-                # Initialize without explicit device - PyTorch will handle device placement
-                # when the model is moved to GPU with .to(device) or .cuda()
-                self.register_buffer('gradnorm_weights', torch.ones(num_losses))
-                self.register_buffer('gradnorm_weight_sum', torch.tensor(float(num_losses)))
-                self.register_buffer('gradnorm_initial_losses', torch.zeros(num_losses))
-                self.register_buffer('gradnorm_weights_grad', torch.zeros(num_losses))
-                self.register_buffer('gradnorm_initted', torch.tensor(False))
-
-                # Buffers for gradient accumulation support
-                self.register_buffer('gradnorm_accumulated_losses', torch.zeros(num_losses))
-                self.register_buffer('gradnorm_accumulation_started', torch.tensor(False))
 
     def forward(self, img, mask=None, mask_generator=None, epoch=None, model_ema=None, teacher=None,
                 collect_moe_weights=False):
@@ -532,6 +505,6 @@ def build_medic_model(cfg, mask_generator=None):
         mask_generator: Optional masking generator (block or evolved)
 
     Returns:
-        MEDiC_Model instance
+        MEDiCModel instance
     """
-    return MEDiC_Model(cfg, mask_generator=mask_generator)
+    return MEDiCModel(cfg, mask_generator=mask_generator)
