@@ -50,7 +50,6 @@ local/
 
 # Testing
 .pytest_cache/
-configs/*_smoke*.yaml
 
 # Visualization images (user-provided)
 images/
