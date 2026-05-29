@@ -58,7 +58,7 @@ srun torchrun \
   --mixup 0.8 \
   --cutmix 1.0 \
   --warmup_epochs 0 \
-  --output_dir "/tmp/medic_verify_finetune_${SLURM_JOB_ID}" \
+  --output_dir "/tmp/explore_verify_finetune_${SLURM_JOB_ID}" \
   --rel_pos_bias \
   --dist_eval \
   2>&1

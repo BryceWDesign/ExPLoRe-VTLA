@@ -50,7 +50,7 @@ srun torchrun \
   --rel_pos_bias \
   --epochs 1 \
   --batch_size 256 \
-  --output_dir "/tmp/medic_verify_linprobe_${SLURM_JOB_ID}" \
+  --output_dir "/tmp/explore_verify_linprobe_${SLURM_JOB_ID}" \
   2>&1
 
 echo "================================================================"
