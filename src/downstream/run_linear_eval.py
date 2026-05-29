@@ -159,7 +159,7 @@ def eval_linear(args):
         wandb_name = utils.derive_wandb_name_from_checkpoint(args.pretrained_weights, "lin")
         log_writer = utils.WandbLogger(
             project_name="MEDiC_linear",
-            entity="utk-iccv23",
+            entity="",
             config=vars(args),
             name=wandb_name
         )

@@ -537,7 +537,7 @@ def main():
     if is_main_process():
         run_name = f"knn-eval-E{args.epoch}-{Path(args.weights_folder).name}"
         wandb_project = get_config_value(cfg, 'wandb_meta.project', 'MEDiC_knn')
-        wandb_entity = get_config_value(cfg, 'wandb_meta.entity', 'utk-iccv23')
+        wandb_entity = get_config_value(cfg, 'wandb_meta.entity', '')
 
         # Load parent run mapping
         folder_name = Path(args.weights_folder).name

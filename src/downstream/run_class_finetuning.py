@@ -515,7 +515,7 @@ def main(args, ds_init):
         wandb_name = utils.derive_wandb_name_from_checkpoint(args.finetune, "fin")
         log_writer = utils.WandbLogger(
             project_name="MEDiC_finetune",
-            entity="utk-iccv23",
+            entity="",
             config=vars(args),
             name=wandb_name
         )
