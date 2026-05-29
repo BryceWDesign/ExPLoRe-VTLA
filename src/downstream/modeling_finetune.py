@@ -14,12 +14,16 @@
 import math
 import warnings
 from functools import partial
+import sys
+import os
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from timm.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
+
+from src.models.soft_moe import SoftMoELayer
 
 
 def register_model_safe(func):
@@ -173,7 +177,8 @@ class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., init_values=None, act_layer=nn.GELU, norm_layer=nn.LayerNorm,
-                 window_size=None, attn_head_dim=None):
+                 window_size=None, attn_head_dim=None, use_soft_moe=False, moe_num_experts=2,
+                 moe_slots_per_expert=1):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
@@ -183,9 +188,21 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
 
-        # Standard MLP
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        # Use Soft MoE or standard MLP
+        self.use_soft_moe = use_soft_moe
+        if use_soft_moe:
+            # Use Soft MoE layer instead of standard MLP
+            self.mlp = SoftMoELayer(
+                dim=dim,
+                num_experts=moe_num_experts,
+                slots_per_expert=moe_slots_per_expert,
+                mlp_ratio=mlp_ratio,
+                # drop=drop,  # TEMPORARILY REMOVED - testing if this causes SGD failure
+            )
+        else:
+            # Standard MLP
+            mlp_hidden_dim = int(dim * mlp_ratio)
+            self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
         if init_values is not None and init_values > 0:
             self.gamma_1 = nn.Parameter(init_values * torch.ones((dim)),requires_grad=True)
@@ -193,22 +210,58 @@ class Block(nn.Module):
         else:
             self.gamma_1, self.gamma_2 = None, None
 
-    def forward(self, x, rel_pos_bias=None, return_attention=False, return_qkv=False):
+    def forward(self, x, rel_pos_bias=None, return_attention=False, return_qkv=False, return_moe_weights=False):
+        """
+        Forward pass with optional MoE weight collection.
+
+        Args:
+            x: Input tensor [B, N, D]
+            rel_pos_bias: Relative position bias for attention
+            return_attention: If True, return attention weights only
+            return_qkv: If True, return (output, qkv)
+            return_moe_weights: If True and block uses MoE, return (output, moe_weights_dict)
+
+        Returns:
+            x: Output tensor [B, N, D]
+            moe_weights: Dict with 'combine' and 'dispatch' weights if return_moe_weights=True
+                         and block uses MoE, else None
+        """
+        moe_weights = None
+
         if return_attention:
             return self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias, return_attention=True)
         if return_qkv:
             y, qkv = self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias, return_qkv=return_qkv)
             x = x + self.drop_path(self.gamma_1 * y)
-            x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
+            # Handle MoE MLP which returns tuple (output, combine_weights)
+            if self.use_soft_moe:
+                mlp_out, moe_weights = self.mlp(self.norm2(x), return_weights=return_moe_weights)
+                x = x + self.drop_path(self.gamma_2 * mlp_out)
+            else:
+                x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
+            if return_moe_weights:
+                return x, qkv, moe_weights
             return x, qkv
 
         if self.gamma_1 is None:
             x = x + self.drop_path(self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias))
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            # Handle MoE MLP which returns tuple (output, combine_weights)
+            if self.use_soft_moe:
+                mlp_out, moe_weights = self.mlp(self.norm2(x), return_weights=return_moe_weights)
+                x = x + self.drop_path(mlp_out)
+            else:
+                x = x + self.drop_path(self.mlp(self.norm2(x)))
         else:
             x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x), rel_pos_bias=rel_pos_bias))
-            x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
+            # Handle MoE MLP which returns tuple (output, combine_weights)
+            if self.use_soft_moe:
+                mlp_out, moe_weights = self.mlp(self.norm2(x), return_weights=return_moe_weights)
+                x = x + self.drop_path(self.gamma_2 * mlp_out)
+            else:
+                x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
 
+        if return_moe_weights:
+            return x, moe_weights
         return x
 
 
@@ -282,7 +335,8 @@ class VisionTransformer(nn.Module):
                  num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
                  drop_path_rate=0., norm_layer=nn.LayerNorm, init_values=None,
                  use_abs_pos_emb=True, use_rel_pos_bias=False, use_shared_rel_pos_bias=False,
-                 use_mean_pooling=True, init_scale=0.001):
+                 use_mean_pooling=True, init_scale=0.001, use_soft_moe=False, moe_num_experts=2,
+                 moe_slots_per_expert=1, moe_mlp_ratio=None, moe_placement="alternating"):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
@@ -307,12 +361,38 @@ class VisionTransformer(nn.Module):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.use_rel_pos_bias = use_rel_pos_bias
 
-        # Build blocks
+        # Store MoE configuration
+        self.use_soft_moe = use_soft_moe
+        self.moe_placement = moe_placement
+        self.moe_mlp_ratio = moe_mlp_ratio if moe_mlp_ratio is not None else mlp_ratio
+
+        # Helper function to determine which blocks use MoE
+        def should_use_moe(block_idx: int, depth: int, placement: str) -> bool:
+            """Determine if a block should use MoE based on placement strategy."""
+            if not use_soft_moe:
+                return False
+
+            if placement == "all":
+                return True
+            elif placement == "alternating":
+                # Use MoE in odd-indexed blocks (1, 3, 5, ...)
+                return block_idx % 2 == 1
+            elif placement == "last_half":
+                return block_idx >= depth // 2
+            elif placement == "first_half":
+                return block_idx < depth // 2
+            elif placement == "last_quarter":
+                return block_idx >= 3 * depth // 4
+            else:
+                # Default to alternating
+                return block_idx % 2 == 1
+
+        # Build blocks with MoE support
         self.blocks = nn.ModuleList([
             Block(
                 dim=embed_dim,
                 num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
+                mlp_ratio=self.moe_mlp_ratio if should_use_moe(i, depth, moe_placement) else mlp_ratio,
                 qkv_bias=qkv_bias,
                 qk_scale=qk_scale,
                 drop=drop_rate,
@@ -320,9 +400,17 @@ class VisionTransformer(nn.Module):
                 drop_path=dpr[i],
                 norm_layer=norm_layer,
                 init_values=init_values,
-                window_size=self.patch_embed.patch_shape if use_rel_pos_bias else None)
+                window_size=self.patch_embed.patch_shape if use_rel_pos_bias else None,
+                use_soft_moe=should_use_moe(i, depth, moe_placement),
+                moe_num_experts=moe_num_experts,
+                moe_slots_per_expert=moe_slots_per_expert)
             for i in range(depth)])
 
+        # Track MoE block indices for reference
+        if use_soft_moe:
+            self.moe_blocks = [i for i in range(depth) if should_use_moe(i, depth, moe_placement)]
+        else:
+            self.moe_blocks = []
         self.norm = nn.Identity() if use_mean_pooling else norm_layer(embed_dim)
         self.fc_norm = norm_layer(embed_dim) if use_mean_pooling else None
         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -346,7 +434,15 @@ class VisionTransformer(nn.Module):
 
         for layer_id, layer in enumerate(self.blocks):
             rescale(layer.attn.proj.weight.data, layer_id + 1)
-            rescale(layer.mlp.fc2.weight.data, layer_id + 1)
+
+            # Handle both standard MLP and Soft MoE layers
+            if layer.use_soft_moe:
+                # For MoE, rescale fc2 of each expert
+                # layer.mlp is the SoftMoELayer which has experts attribute directly
+                for expert in layer.mlp.experts:
+                    rescale(expert.fc2.weight.data, layer_id + 1)
+            else:
+                rescale(layer.mlp.fc2.weight.data, layer_id + 1)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -394,7 +490,21 @@ class VisionTransformer(nn.Module):
         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
 
 
-    def forward_features(self, x, return_patch_tokens=False, return_all_tokens=False, **kwargs):
+    def forward_features(self, x, return_patch_tokens=False, return_all_tokens=False,
+                         return_combine_weights=False, **kwargs):
+        """
+        Forward features with optional MoE weight collection.
+
+        Args:
+            x: Input tensor [B, C, H, W]
+            return_patch_tokens: If True, return patch tokens only
+            return_all_tokens: If True, return all tokens including CLS
+            return_combine_weights: If True, also return MoE weights from all MoE blocks
+
+        Returns:
+            features: Output features
+            all_moe_weights: List of MoE weight dicts from each MoE block (if return_combine_weights=True)
+        """
         B, nc, w, h = x.shape
         x = self.patch_embed(x)
         batch_size, seq_len, _ = x.size()
@@ -411,8 +521,16 @@ class VisionTransformer(nn.Module):
         x = self.pos_drop(x)
 
         rel_pos_bias = self.rel_pos_bias() if self.rel_pos_bias is not None else None
+
+        # Collect MoE weights from all blocks if requested
+        all_moe_weights = [] if return_combine_weights else None
         for blk in self.blocks:
-            x = blk(x, rel_pos_bias=rel_pos_bias)
+            if return_combine_weights:
+                x, moe_weights = blk(x, rel_pos_bias=rel_pos_bias, return_moe_weights=True)
+                if moe_weights is not None:  # Only MoE blocks return weights
+                    all_moe_weights.append(moe_weights)
+            else:
+                x = blk(x, rel_pos_bias=rel_pos_bias)
 
         x = self.norm(x)
         if self.fc_norm is not None:
@@ -432,14 +550,38 @@ class VisionTransformer(nn.Module):
             else:
                 features = x[:, 0]
 
+        if return_combine_weights:
+            return features, all_moe_weights
         return features
 
-    def forward(self, x, return_patch_tokens=False, return_all_tokens=False, **kwargs):
-        features = self.forward_features(
-            x, return_patch_tokens=return_patch_tokens,
-            return_all_tokens=return_all_tokens, **kwargs)
-        logits = self.head(features)
-        return logits
+    def forward(self, x, return_patch_tokens=False, return_all_tokens=False,
+                return_combine_weights=False, **kwargs):
+        """
+        Forward pass with optional MoE weight collection.
+
+        Args:
+            x: Input tensor [B, C, H, W]
+            return_patch_tokens: If True, return patch tokens only
+            return_all_tokens: If True, return all tokens including CLS
+            return_combine_weights: If True, also return MoE weights from all MoE blocks
+
+        Returns:
+            logits: Classification logits [B, num_classes]
+            all_moe_weights: List of MoE weight dicts (if return_combine_weights=True)
+        """
+        if return_combine_weights:
+            features, all_moe_weights = self.forward_features(
+                x, return_patch_tokens=return_patch_tokens,
+                return_all_tokens=return_all_tokens,
+                return_combine_weights=True, **kwargs)
+            logits = self.head(features)
+            return logits, all_moe_weights
+        else:
+            features = self.forward_features(
+                x, return_patch_tokens=return_patch_tokens,
+                return_all_tokens=return_all_tokens, **kwargs)
+            logits = self.head(features)
+            return logits
 
     def forward_intermediate(self, x, layer_id=12, norm_output=False):
         x = self.patch_embed(x)
