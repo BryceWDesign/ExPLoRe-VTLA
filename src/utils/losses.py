@@ -1609,4 +1609,17 @@ def compute_three_losses(
 # Allow MEDiC-style imports (`from src.utils.losses import compute_loss, patchify`)
 # to keep working against the MEDiC_torch-ported API.
 from src.utils.utils import patchify_img as patchify  # noqa: E402, F401
-compute_loss = compute_three_losses  # noqa: E305
+
+
+def compute_loss(pred_tok, pred_pix, T, img, mask, cfg):  # noqa: E305
+    """MEDiC-scaffold-compatible compute_loss; thin shim over compute_three_losses.
+
+    Injects use_mask_tokens from the config so callers don't need to pass it
+    explicitly (MEDiC scaffold's signature didn't).
+    """
+    use_mt = bool(
+        cfg.get("model", {}).get("student", {}).get("use_mask_tokens", False)
+    )
+    return compute_three_losses(
+        pred_tok, pred_pix, T, img, mask, cfg, use_mask_tokens=use_mt
+    )

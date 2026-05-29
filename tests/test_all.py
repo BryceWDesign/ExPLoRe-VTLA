@@ -87,9 +87,17 @@ decoder = MAEDecoder(
 # ── Helper ───────────────────────────────────────────────────────────────────
 
 def _run_forward(model, cfg):
-    """Run forward pass and return (pred_tok, pred_pix, mask_out, ids_restore)."""
+    """Run forward pass and return (pred_tok, pred_pix, mask_out, ids_restore).
+
+    ExPLoRe's MEDiCModel.forward returns an 8-tuple
+    (pred_tok, pred_pix, mask_out, combine_weights, ids_restore,
+     combine_weights_dict, head_combine_weights, pixel_combine_weights);
+    extract the 4 fields the MEDiC test API expects.
+    """
     masks = torch.stack([mask_block() for _ in range(B)])
-    return model(IMG, masks, mask_block)
+    out = model(IMG, masks, mask_block)
+    pred_tok, pred_pix, mask_out, _combine, ids_restore, *_ = out
+    return pred_tok, pred_pix, mask_out, ids_restore
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -166,7 +174,7 @@ def test_build_full():
 def test_forward_baseline_returns():
     """Forward pass baseline returns (pred_tok, None, mask, ids_restore)."""
     masks = torch.stack([mask_block() for _ in range(B)])
-    pred_tok, pred_pix, mask_out, ids_restore = model_baseline(IMG, masks, mask_block)
+    pred_tok, pred_pix, mask_out, _combine, ids_restore, *_ = model_baseline(IMG, masks, mask_block)
     assert pred_tok is not None, "pred_tok should not be None for baseline"
     assert pred_pix is None, "pred_pix should be None for baseline (no decoder loss)"
     assert mask_out.shape == (B, N), f"mask shape {mask_out.shape}, expected ({B}, {N})"
@@ -175,7 +183,7 @@ def test_forward_baseline_returns():
 def test_forward_full_returns():
     """Forward pass full returns (pred_tok, pred_pix, mask, ids_restore)."""
     masks = torch.stack([mask_block() for _ in range(B)])
-    pred_tok, pred_pix, mask_out, ids_restore = model_full(IMG, masks, mask_block)
+    pred_tok, pred_pix, mask_out, _combine, ids_restore, *_ = model_full(IMG, masks, mask_block)
     assert pred_tok is not None, "pred_tok should not be None"
     assert pred_pix is not None, "pred_pix should not be None for full MEDiC"
     assert pred_pix.shape == (B, N, PATCH_SIZE**2 * 3), (
@@ -311,7 +319,7 @@ def test_backward_baseline():
     """Full forward+backward works for baseline config."""
     m = build_medic_model(BASELINE_CFG)
     masks = torch.stack([mask_block() for _ in range(B)])
-    pred_tok, pred_pix, mask_out, ids_restore = m(IMG, masks, mask_block)
+    pred_tok, pred_pix, mask_out, _combine, ids_restore, *_ = m(IMG, masks, mask_block)
     T = torch.randn(B, pred_tok.shape[1], D_t)
     loss, ld = compute_loss(pred_tok, pred_pix, T, IMG, mask_out, BASELINE_CFG)
     loss.backward()
@@ -324,7 +332,7 @@ def test_backward_full():
     """Full forward+backward works for full MEDiC config."""
     m = build_medic_model(FULL_CFG)
     masks = torch.stack([mask_block() for _ in range(B)])
-    pred_tok, pred_pix, mask_out, ids_restore = m(IMG, masks, mask_block)
+    pred_tok, pred_pix, mask_out, _combine, ids_restore, *_ = m(IMG, masks, mask_block)
     T = torch.randn(B, pred_tok.shape[1], D_t)
     loss, ld = compute_loss(pred_tok, pred_pix, T, IMG, mask_out, FULL_CFG)
     loss.backward()
@@ -357,7 +365,7 @@ def test_build_student_from_config():
     assert student.embed_dim == D_s, f"Expected embed_dim={D_s}, got {student.embed_dim}"
     assert student.use_mask_tokens == False
     masks = torch.stack([mask_block() for _ in range(B)])
-    x, ids_restore = student(IMG, masks, mask_block)
+    x, ids_restore, *_ = student(IMG, masks, mask_block)
     assert x.shape[0] == B
     assert x.shape[2] == D_s
 
