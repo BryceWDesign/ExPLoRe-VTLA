@@ -13,9 +13,9 @@
 
 # MEDiC pretraining: ViT-Base, 300 epochs, 4 GPUs
 # Usage: sbatch scripts/pretrain.sh [config_path]
-#   Default: configs/pretrain_medic.yaml (block masking 40%, dense encoding)
+#   Default: configs/pretrain_explore_2exp.yaml (block masking 40%, dense encoding)
 
-CONFIG=${1:-configs/pretrain_medic.yaml}
+CONFIG=${1:-configs/pretrain_explore_2exp.yaml}
 
 if [ -f .env ]; then source .env; fi
 nvidia-smi
