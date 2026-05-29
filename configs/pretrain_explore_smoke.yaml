@@ -1,6 +1,6 @@
 wandb_meta:
   project: "ExPLoRe"
-  entity: "utk-iccv23"
+  entity: ""  # set to your wandb entity
   name: "explore_smoke"
   desc: "ExPLoRe smoke test: 2-expert Token+CLS sparse, tiny subset, 2 epochs"
 
@@ -73,9 +73,9 @@ model:
 data:
   batch_per_gpu: 64              # Full training with larger batch (effective: 2048 with 4 GPUs)
   num_workers: 16
-  data_path: "/lustre/isaac24/proj/UTK0256/datasets/imagenet"
-  train_dir: "/lustre/isaac24/proj/UTK0256/datasets/imagenet/train"
-  val_dir: "/lustre/isaac24/proj/UTK0256/datasets/imagenet/val"
+  data_path: "/path/to/imagenet"  # update to your dataset root
+  train_dir: "/path/to/imagenet/train"
+  val_dir: "/path/to/imagenet/val"
   subset: 10 # Full dataset (all images)
   subset_start: 0
   augmentation:
