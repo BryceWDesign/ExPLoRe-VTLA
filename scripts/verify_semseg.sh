@@ -38,7 +38,7 @@ cd "${SEMSEG_DIR}" || exit 1
 
 # Use training config but override to 1000 iters
 python tools/train.py \
-  "src/downstream/segmentation/configs/medic/upernet_medic_base_512_160k_ade20k.py" \
+  "configs/medic/upernet_medic_base_512_160k_ade20k.py" \
   --work-dir "/tmp/explore_verify_semseg_${SLURM_JOB_ID}" \
   --options \
     model.backbone.pretrained="${PRETRAINED}" \
