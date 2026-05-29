@@ -34,8 +34,8 @@ from .utils.utils import (
 from .utils.optim_factory import get_parameter_groups, get_num_layer_for_vit, LayerDecayValueAssigner
 from .utils.losses import compute_three_losses
 from .utils.viz import get_reconstruction_fig, plot_scheduler, log_attention_plots_to_wandb, fig_to_pil, get_moe_weight_fig
-from .data.loader import build_loader, MedicDataset
-from .data.transforms import build_medic_transform
+from .data.loader import build_loader, MEDiCDataset
+from .data.transforms import build_transform
 from .models.medic_model import build_medic_model
 from .models import build_teacher, build_student
 from .utils.masking_generator import BlockMaskingGenerator, create_masking_generator, get_masking_generator_info
@@ -522,7 +522,7 @@ def load_visualization_images(cfg: Dict[str, Any],
     if not is_main_process():
         return None
 
-    viz_transform = cast(Compose, build_medic_transform(is_train=False, cfg=cfg))
+    viz_transform = cast(Compose, build_transform(is_train=False, cfg=cfg))
     img_paths = sorted(glob.glob("images/*.JPEG"))
     if not img_paths:
         print("No images found in images/ for visualization.")
@@ -1091,7 +1091,7 @@ def train_one_epoch(
             mask = mask.to(device, non_blocking=True)
         epoch_samples += img.shape[0]
 
-        assert isinstance(train_loader.dataset, MedicDataset)
+        assert isinstance(train_loader.dataset, MEDiCDataset)
 
         with torch.autocast(device_type='cuda', dtype=dtype):
             # Check if using sparse encoder
@@ -1394,7 +1394,7 @@ def validate_one_epoch(
         img = img.to(device, non_blocking=True)
         if mask is not None:
             mask = mask.to(device, non_blocking=True)
-        assert isinstance(val_loader.dataset, MedicDataset)
+        assert isinstance(val_loader.dataset, MEDiCDataset)
 
         with torch.autocast(device_type='cuda', dtype=dtype):
             # Check if using sparse encoder
