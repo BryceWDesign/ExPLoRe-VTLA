@@ -336,7 +336,7 @@ def get_moe_weight_fig(
     Visible patches remain transparent showing the original image.
 
     Args:
-        model: MEDiC_Model (unwrapped, not DDP)
+        model: MEDiCModel (unwrapped, not DDP)
         batch: (images, labels) tuple
         mask: Binary mask [B, N] indicating masked patches (1 = masked, 0 = visible)
         epoch: Current epoch number

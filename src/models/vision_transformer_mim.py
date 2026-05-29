@@ -702,9 +702,9 @@ class VisionTransformerMIM(nn.Module):
 
         if mask is None:
             # mask_generator is passed through for shuffle indices but doesn't generate masks here
-            # MEDiC_Model is responsible for mask generation before calling this forward method
+            # MEDiCModel is responsible for mask generation before calling this forward method
             raise ValueError("Mask must be provided to VisionTransformerMIM.forward(). "
-                           "For automatic mask generation, use MEDiC_Model.")
+                           "For automatic mask generation, use MEDiCModel.")
 
         if self.use_mask_tokens:
             # BEiT-style: use mask tokens
