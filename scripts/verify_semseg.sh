@@ -16,7 +16,7 @@
 set -e
 
 PRETRAINED=${1:?Usage: sbatch scripts/verify_semseg.sh <checkpoint_path>}
-ADE20K_ROOT=${2:-/lustre/isaac24/proj/UTK0256/datasets/ADEChallengeData2016}
+ADE20K_ROOT=${2:-/path/to/ADE20K}
 
 module load cuda/12.1.1-binary
 module load cudnn/8.9.4-binary

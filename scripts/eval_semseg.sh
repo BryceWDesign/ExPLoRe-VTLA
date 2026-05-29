@@ -16,7 +16,7 @@
 # Expected: ~52.6 mIoU
 
 CHECKPOINT=${1:?Usage: sbatch scripts/eval_semseg.sh <checkpoint_path> [ade20k_root]}
-ADE20K_ROOT=${2:-/lustre/isaac24/proj/UTK0256/datasets/ADEChallengeData2016}
+ADE20K_ROOT=${2:-/path/to/ADE20K}
 
 if [ -f .env ]; then source .env; fi
 nvidia-smi

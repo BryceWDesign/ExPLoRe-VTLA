@@ -16,7 +16,7 @@
 set -e
 
 PRETRAINED=${1:?Usage: sbatch scripts/verify_finetune.sh <checkpoint_path>}
-DATA=${2:-/lustre/isaac24/proj/UTK0256/datasets/imagenet}
+DATA=${2:-/path/to/imagenet}
 
 module load cuda/12.1.1-binary
 module load cudnn/8.9.4-binary

@@ -16,7 +16,7 @@
 # Usage: sbatch scripts/linprobe.sh <pretrained_checkpoint>
 
 PRETRAINED=${1:?Usage: sbatch scripts/linprobe.sh <pretrained_checkpoint_path>}
-DATA=${2:-/lustre/isaac24/proj/UTK0256/datasets/imagenet}
+DATA=${2:-/path/to/imagenet}
 OUTPUT=${3:-./output/linprobe}
 
 if [ -f .env ]; then source .env; fi
