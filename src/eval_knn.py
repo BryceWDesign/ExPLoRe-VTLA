@@ -17,7 +17,7 @@ from typing import Dict, Any, Tuple
 
 # No longer using timm, we are using the project's own model builder
 from .models import build_student
-from .models.vision_transformer import VisionTransformerMIM
+from .models.vision_transformer_mim import VisionTransformerMIM
 
 from .utils.utils import init_distributed_mode, is_main_process, get_rank, get_world_size
 
@@ -76,7 +76,7 @@ def load_checkpoint_for_knn(checkpoint_path: str, model: nn.Module, device: torc
 
     # Extract student model weights from MEDiC model
     student_state_dict = {}
-    non_student_components = {'teacher', 'distill_head'}
+    non_student_components = {'teacher', 'distill_head', 'pixel_decoder', 'decoder'}
 
     for key, value in state_dict.items():
         if key.startswith('student.'):
@@ -124,10 +124,18 @@ def load_checkpoint_for_knn(checkpoint_path: str, model: nn.Module, device: torc
 # =================================================================================================
 
 class VisionTransformerKNN(VisionTransformerMIM):
-    """Vision Transformer for k-NN evaluation without masking."""
+    """Vision Transformer for k-NN evaluation without masking.
+
+    This class handles both standard ViT and MoE-ViT models correctly
+    by using deterministic MoE routing during inference.
+    """
 
     def forward(self, img, mask=None, mask_generator=None, return_all_tokens=True):
-        """Forward pass without masking for k-NN feature extraction."""
+        """Forward pass without masking for k-NN feature extraction.
+
+        Supports both standard blocks and MoE blocks. For MoE blocks,
+        uses deterministic routing (no combine weight return).
+        """
         # For k-NN, we don't use masking, so we override to bypass the mask requirement
         rel_pos_bias = self.rel_pos_bias() if self.rel_pos_bias is not None else None
 
@@ -150,9 +158,15 @@ class VisionTransformerKNN(VisionTransformerMIM):
         x = torch.cat((cls_tokens, x), dim=1)
         x = self.pos_drop(x)
 
-        # Apply transformer blocks
+        # Apply transformer blocks (handles both standard and MoE blocks)
         for blk in self.blocks:
-            x = blk(x, shared_rel_pos_bias=rel_pos_bias)
+            # Check if this is an MoE block by checking if mlp has soft_moe attribute
+            if hasattr(blk.mlp, 'soft_moe'):
+                # MoE block - disable combine weight return for inference
+                x = blk(x, shared_rel_pos_bias=rel_pos_bias, return_combine_weights=False)
+            else:
+                # Standard block
+                x = blk(x, shared_rel_pos_bias=rel_pos_bias)
 
         x = self.norm(x)
 
@@ -523,7 +537,7 @@ def main():
     if is_main_process():
         run_name = f"knn-eval-E{args.epoch}-{Path(args.weights_folder).name}"
         wandb_project = get_config_value(cfg, 'wandb_meta.project', 'MEDiC_knn')
-        wandb_entity = get_config_value(cfg, 'wandb_meta.entity', None)
+        wandb_entity = get_config_value(cfg, 'wandb_meta.entity', 'utk-iccv23')
 
         # Load parent run mapping
         folder_name = Path(args.weights_folder).name
@@ -576,46 +590,50 @@ def main():
     else:
         raise KeyError(f"No model state found in checkpoint. Available keys: {list(checkpoint.keys())}")
 
-    # --- Load Weights using dynamic detection ---
-    # Load checkpoint first to detect architecture from embedded config
-    student_state_dict, checkpoint_config, checkpoint_wandb = load_checkpoint_for_knn(pretrained_weights, None, device, cfg)
-
     # --- Build Model ---
-    # Prefer architecture config from checkpoint (matches the trained weights),
-    # fall back to YAML config if checkpoint doesn't embed config
-    if checkpoint_config and "model" in checkpoint_config and "student" in checkpoint_config["model"]:
-        student_cfg = checkpoint_config["model"]["student"]
-        if is_main_process():
-            print(f"Using architecture config from checkpoint")
-    else:
-        student_cfg = cfg["model"]["student"]
-        if is_main_process():
-            print(f"Using architecture config from YAML: {args.cfg}")
-
     if is_main_process():
         print(f"Building model: {args.arch}")
-        print(f"  embed_dim={student_cfg.get('embed_dim')}, depth={student_cfg.get('depth')}, "
-              f"abs_pos={student_cfg.get('use_abs_pos_emb')}, "
-              f"shared_rel_pos={student_cfg.get('use_shared_rel_pos_bias')}, "
-              f"mask_tokens={student_cfg.get('use_mask_tokens')}")
+
+    # Build the student model using VisionTransformerKNN for k-NN evaluation
+    # CRITICAL: Include ALL config parameters including MoE to match checkpoint architecture
+    student_cfg = cfg["model"]["student"]
+
+    # Detect if this is an MoE model
+    use_moe = student_cfg.get("use_soft_moe", False)
+    if is_main_process():
+        if use_moe:
+            print(f"Detected MoE model with {student_cfg.get('moe_num_experts', 2)} experts")
+            print(f"  Placement: {student_cfg.get('moe_placement', 'alternating')}")
+        else:
+            print("Detected standard (non-MoE) model")
 
     student_model = VisionTransformerKNN(
-        img_size=student_cfg.get("img_size", 224),
-        patch_size=student_cfg.get("patch_size", 16),
-        embed_dim=student_cfg.get("embed_dim", 768),
-        depth=student_cfg.get("depth", 12),
-        num_heads=student_cfg.get("num_heads", 12),
+        img_size=student_cfg["img_size"],
+        patch_size=student_cfg["patch_size"],
+        embed_dim=student_cfg["embed_dim"],
+        depth=student_cfg["depth"],
+        num_heads=student_cfg["num_heads"],
         drop_path_rate=student_cfg.get("drop_path_rate", 0.1),
         init_values=student_cfg.get("init_values", 0.1),
         use_abs_pos_emb=student_cfg.get("use_abs_pos_emb", False),
         use_sincos_pos_emb=student_cfg.get("use_sincos_pos_emb", False),
         use_shared_rel_pos_bias=student_cfg.get("use_shared_rel_pos_bias", True),
         use_rel_pos_bias=student_cfg.get("use_rel_pos_bias", False),
+        # MoE parameters (backward compatible - ignored if use_soft_moe=False)
+        use_soft_moe=use_moe,
+        moe_num_experts=student_cfg.get("moe_num_experts", 2),
+        moe_slots_per_expert=student_cfg.get("moe_slots_per_expert", 1),
+        moe_mlp_ratio=student_cfg.get("moe_mlp_ratio", 4.0),
+        moe_placement=student_cfg.get("moe_placement", "alternating"),
     )
 
     # Wrap the student model in our k-NN feature extractor
     model = ViTForFeatures(student_model)
     model.to(device)
+
+    # --- Load Weights using dynamic detection ---
+    # Use the checkpoint loading function to extract student weights
+    student_state_dict, checkpoint_config, checkpoint_wandb = load_checkpoint_for_knn(pretrained_weights, model, device, cfg)
 
     # Use checkpoint config if available and no config was provided
     if checkpoint_config and not cfg:
@@ -645,7 +663,7 @@ def main():
                 print(f"Using parent group from run_mappings.json: {group_name}")
             else:
                 # Fallback to run_id or folder_name
-                group_name = parent_run_id if parent_run_id else folder_name
+                group_name = parent_run_id if parent_run_id and parent_run_id != 'TODO_FILL_IN' else folder_name
                 print(f"Using fallback group: {group_name}")
         else:
             # No checkpoint metadata, check run_mappings.json or use fallback
@@ -653,7 +671,7 @@ def main():
                 group_name = parent_group
                 print(f"Using parent group from run_mappings.json: {group_name}")
             else:
-                group_name = parent_run_id if parent_run_id else folder_name
+                group_name = parent_run_id if parent_run_id and parent_run_id != 'TODO_FILL_IN' else folder_name
                 print(f"Using fallback group: {group_name}")
 
         # Apply shortening to group_name for cleaner wandb UI
@@ -721,7 +739,7 @@ def main():
     original_keys = len(student_state_dict)
 
     # CRITICAL: Use strict=False only as fallback, but validate thoroughly
-    # Validate loaded weights match the model
+    # This ensures we catch architecture mismatches (e.g., MoE vs non-MoE)
     msg = model.vit.load_state_dict(student_state_dict, strict=False)
 
     if is_main_process():
@@ -732,25 +750,51 @@ def main():
         print(f"Model expects: {len(model.vit.state_dict())} parameters")
         print(f"Loading result: {len(msg.missing_keys)} missing, {len(msg.unexpected_keys)} unexpected")
 
+        # Validate weight loading quality
+        moe_mismatch = False
+
+        # Check for MoE-related missing/unexpected keys (indicates architecture mismatch)
+        if msg.missing_keys:
+            moe_missing = [k for k in msg.missing_keys if 'mlp.' in k and ('fc1' in k or 'fc2' in k)]
+            if moe_missing:
+                print(f"\nWARNING: {len(moe_missing)} standard MLP weights missing (expected for MoE model)")
+                moe_mismatch = True
+
+        if msg.unexpected_keys:
+            moe_unexpected = [k for k in msg.unexpected_keys if 'soft_moe' in k or 'experts' in k]
+            if moe_unexpected:
+                print(f"\nCRITICAL ERROR: {len(moe_unexpected)} MoE weights in checkpoint but model is non-MoE!")
+                print(f"   This means the model architecture doesn't match the checkpoint.")
+                print(f"   You are evaluating with RANDOM WEIGHTS in MoE layers!")
+                moe_mismatch = True
+                # Print first few for debugging
+                print(f"\n   Example unexpected MoE keys:")
+                for key in moe_unexpected[:5]:
+                    print(f"     - {key}")
+
         # Print detailed diagnostics if there are issues
-        if len(msg.missing_keys) > 0:
+        if len(msg.missing_keys) > 0 and not moe_mismatch:
             print(f"\nWARNING: Missing keys ({len(msg.missing_keys)}):")
-            for key in msg.missing_keys[:10]:
+            for key in msg.missing_keys[:10]:  # Print first 10
                 print(f"  - {key}")
             if len(msg.missing_keys) > 10:
                 print(f"  ... and {len(msg.missing_keys) - 10} more")
 
-        if len(msg.unexpected_keys) > 0:
+        if len(msg.unexpected_keys) > 0 and not moe_mismatch:
             print(f"\nUnexpected keys ({len(msg.unexpected_keys)}):")
-            for key in msg.unexpected_keys[:10]:
+            for key in msg.unexpected_keys[:10]:  # Print first 10
                 print(f"  - {key}")
             if len(msg.unexpected_keys) > 10:
                 print(f"  ... and {len(msg.unexpected_keys) - 10} more")
 
+        # Final validation
         if len(msg.missing_keys) == 0 and len(msg.unexpected_keys) == 0:
             print(f"\nSUCCESS: Perfect match! All weights loaded successfully.")
-        else:
+        elif not moe_mismatch:
             print(f"\nWARNING: Partial match. Some keys missing/unexpected (may be OK for position embeddings).")
+        else:
+            print(f"\nERROR: Architecture mismatch detected! Results will be INVALID.")
+            print(f"   Please check that the config file matches the checkpoint.")
 
         print(f"{'='*80}\n")
 
