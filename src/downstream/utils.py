@@ -867,7 +867,6 @@ def derive_wandb_name_from_checkpoint(checkpoint_path, task_prefix):
         'fin': 'finetune-eval',
         'lin': 'linear-eval',
         'seg': 'semseg-eval',
-        'det': 'objdet-eval',  # Object detection
         'knn': 'knn-eval'
     }
     task_name = task_map.get(task_prefix, f'{task_prefix}-eval')
