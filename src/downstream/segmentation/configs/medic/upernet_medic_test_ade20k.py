@@ -2,7 +2,7 @@
 # Does NOT inherit from base configs to avoid format conflicts
 
 # Dataset root
-data_root = '/lustre/isaac24/proj/UTK0256/datasets/ADEChallengeData2016'
+data_root = '/path/to/ADE20K'
 
 # ImageNet normalization
 img_norm_cfg = dict(
