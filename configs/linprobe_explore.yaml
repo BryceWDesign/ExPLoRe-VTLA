@@ -1,0 +1,30 @@
+# ExPLoRe linear probing — recommended hyperparameters
+# Reference: MEDiC Appendix C.2
+#
+# Linear probe is done on frozen [CLS] token features; no adaptation recipes
+# (FR/FA/ExD) needed since the backbone is fully frozen.
+
+wandb_meta:
+  project: "ExPLoRe"
+  name: "explore_linprobe"
+  desc: "ExPLoRe linear probe (frozen backbone, [CLS] features)"
+
+train:
+  epochs: 100
+  batch_per_gpu: 1024
+  warmup_epochs: 20
+
+optim:
+  lr: 5.0e-4
+  min_lr: 1.0e-6
+  betas: [0.9, 0.999]
+  weight_decay: 0.05
+  drop_path: 0.1
+
+augmentation:
+  mixup: 0.8
+  cutmix: 1.0
+  randaug: "9/0.5"
+  label_smoothing: 0.1
+
+pretrained: null

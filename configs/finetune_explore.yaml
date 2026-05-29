@@ -1,0 +1,44 @@
+# ExPLoRe finetuning — recommended hyperparameters
+# Reference: ExPLoRe paper Tab. 4.7 (FR+FA+ExD recipe) + MEDiC Appendix C.3
+#
+# These values are passed as CLI args in `scripts/finetune.sh`; this YAML is the
+# canonical place to discover and override them. To use a different value,
+# pass it via the script's positional or `--key value` overrides.
+
+wandb_meta:
+  project: "ExPLoRe"
+  name: "explore_finetune"
+  desc: "ExPLoRe finetune with FR+FA+ExD adaptation recipe (paper Tab. 4.7)"
+
+# Adaptation recipe (paper §4.6.3, Tab. 4.7)
+# Default = FR+FA+ExD which reaches 85.3% FT (+1.5% over vanilla MoE; +0.5% over no-MoE)
+adaptation:
+  freeze_routing: true       # FR: preserve pretrained router parameters
+  freeze_attention: true     # FA: freeze attention weights
+  expert_dropout: 0.4        # ExD: prevent over-reliance on dominant experts
+  # Ablation: set any to false to reproduce Tab. 4.7 ablation rows
+
+# Training (MEDiC Appendix C.3 ImageNet-1K finetune)
+train:
+  epochs: 100
+  batch_per_gpu: 1024
+  warmup_epochs: 10
+
+optim:
+  lr: 5.0e-4
+  min_lr: 4.0e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.05
+  layer_decay: 0.65          # Layer-wise LR decay
+  grad_clip: null
+
+augmentation:
+  mixup: 0.6
+  cutmix: 0.75
+  randaug: "9/0.5"
+  label_smoothing: 0.1
+  erasing_prob: 0.25
+  drop_path: 0.1
+
+# Pretrained checkpoint (set via script arg; this is a placeholder)
+pretrained: null

@@ -1,0 +1,40 @@
+# ExPLoRe semantic segmentation (ADE20K) — recommended hyperparameters
+# Reference: ExPLoRe paper Tab. 4.8 (FR+FA+ExD recipe on UperNet) + MEDiC Appendix C.4
+#
+# UperNet head + MoE-aware backbone. The FR+FA+ExD recipe closes the 2.5-2.9
+# mIoU MoE-transfer gap so MoE matches/exceeds non-MoE on dense prediction.
+
+wandb_meta:
+  project: "ExPLoRe"
+  name: "explore_semseg_ade20k"
+  desc: "ExPLoRe ADE20K semseg with FR+FA+ExD recipe (paper Tab. 4.8)"
+
+# Adaptation recipe (paper §4.6.4, Tab. 4.8)
+adaptation:
+  freeze_routing: true
+  freeze_attention: true
+  expert_dropout: 0.4
+
+# Training (MEDiC Appendix C.4 ADE20K)
+dataset: "ADE20K"
+train:
+  iterations: 160000          # 160K iter (paper)
+  batch_per_gpu: 4            # → total batch 16 across 4 GPUs
+  warmup_steps: 1500
+  input_size: [512, 512]
+
+optim:
+  lr: 0.5e-4                  # Peak LR (lower than classification finetune)
+  min_lr: 0
+  betas: [0.9, 0.999]
+  weight_decay: 0.05
+  layer_decay: 0.75           # Slightly less aggressive than classification (0.65)
+  drop_path: 0.1
+
+model:
+  decode_head: "UperNet"
+  positional:
+    relative_pos_embed: true
+    shared_relative_pos_embed: false  # NOTE: differs from pretrain (Tab. C.1 vs C.4)
+
+pretrained: null
