@@ -28,6 +28,7 @@ echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 echo "SLURM Job: $SLURM_JOB_ID"
 echo "================================================================"
 
+if [ -f .env ]; then source .env; fi
 source .venv/bin/activate
 export PYTHONPATH="${SLURM_SUBMIT_DIR}"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
