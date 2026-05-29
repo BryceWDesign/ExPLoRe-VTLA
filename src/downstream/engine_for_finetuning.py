@@ -21,24 +21,58 @@ from timm.utils import accuracy, ModelEma
 
 import utils
 
+# MoE entropy loss for finetuning stability (based on ST-MoE/FLAN-MoE research)
+# Import from src/utils (not the local utils module)
+try:
+    # Need to import using absolute path to avoid conflict with local utils module
+    import importlib.util
+    _losses_path = os.path.join(os.path.dirname(__file__), '..', 'utils', 'losses.py')
+    _spec = importlib.util.spec_from_file_location("src_utils_losses", _losses_path)
+    _losses_module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_losses_module)
+    compute_dispatch_entropy_loss = _losses_module.compute_dispatch_entropy_loss
+    MOE_ENTROPY_AVAILABLE = True
+except Exception as e:
+    MOE_ENTROPY_AVAILABLE = False
+    print(f"Warning: MoE entropy loss not available: {e}")
 
 
-def train_class_batch(model, samples, target, criterion):
-    """Forward pass for classification finetuning.
+def train_class_batch(model, samples, target, criterion, return_moe_weights=False):
+    """Forward pass with optional MoE weight collection for entropy loss.
 
     Args:
         model: The model to run forward pass on
         samples: Input samples
         target: Target labels
         criterion: Loss criterion
+        return_moe_weights: If True, attempt to get MoE weights from model
 
     Returns:
         loss: Classification loss
         outputs: Model outputs (logits)
+        moe_weights: MoE routing weights if available, else None
     """
-    logits = model(samples)
+    moe_weights = None
+
+    if return_moe_weights:
+        # Try to get MoE weights from the model
+        # VisionTransformerMIM supports return_combine_weights parameter
+        try:
+            outputs = model(samples, return_combine_weights=True)
+            if isinstance(outputs, tuple) and len(outputs) >= 2:
+                # Model returned (logits, moe_weights) or (logits, aux, moe_weights)
+                logits = outputs[0]
+                moe_weights = outputs[-1]  # Last element is MoE weights
+            else:
+                logits = outputs
+        except TypeError:
+            # Model doesn't support return_combine_weights
+            logits = model(samples)
+    else:
+        logits = model(samples)
+
     loss = criterion(logits, target)
-    return loss, logits
+    return loss, logits, moe_weights
 
 
 def get_loss_scale_for_deepspeed(model):
@@ -52,14 +86,25 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None, log_writer=None,
                     start_steps=None, lr_schedule_values=None, wd_schedule_values=None,
                     num_training_steps_per_epoch=None, update_freq=None,
-                    ):
-    """Train for one epoch."""
+                    moe_entropy_weight: float = 0.0):
+    """Train for one epoch with optional MoE entropy regularization.
+
+    Args:
+        moe_entropy_weight: Weight for dispatch entropy loss (0=disabled).
+            Helps maintain routing diversity during finetuning.
+            Recommended: 1.0-2.5 (pretraining typically uses 5.0).
+    """
     model.train(True)
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('min_lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
+
+    # Check if MoE entropy loss should be used
+    use_moe_entropy = moe_entropy_weight > 0 and MOE_ENTROPY_AVAILABLE
+    if moe_entropy_weight > 0 and not MOE_ENTROPY_AVAILABLE:
+        print("Warning: moe_entropy_weight > 0 but MoE entropy loss not available")
 
     if loss_scaler is None:
         model.zero_grad()
@@ -86,13 +131,39 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
 
-        # Forward pass
+        # Forward pass with optional MoE weight collection
+        entropy_loss_value = 0.0
         if loss_scaler is None:
             samples = samples.half()
-            loss, output = train_class_batch(model, samples, targets, criterion)
+            loss, output, moe_weights = train_class_batch(
+                model, samples, targets, criterion, return_moe_weights=use_moe_entropy)
         else:
             with torch.amp.autocast('cuda'):
-                loss, output = train_class_batch(model, samples, targets, criterion)
+                loss, output, moe_weights = train_class_batch(
+                    model, samples, targets, criterion, return_moe_weights=use_moe_entropy)
+
+        # Add MoE entropy loss if enabled (maintains routing diversity during finetuning)
+        # moe_weights is a list of dicts (one per MoE block)
+        if use_moe_entropy and moe_weights is not None and len(moe_weights) > 0:
+            try:
+                # Compute entropy loss for each MoE block and average
+                block_entropy_losses = []
+                for block_weights in moe_weights:
+                    block_entropy_loss, _ = compute_dispatch_entropy_loss(
+                        block_weights,
+                        weight_type="dispatch",
+                        aggregation="separate"
+                    )
+                    block_entropy_losses.append(block_entropy_loss)
+
+                # Average across all MoE blocks
+                entropy_loss = torch.stack(block_entropy_losses).mean()
+                loss = loss + moe_entropy_weight * entropy_loss
+                entropy_loss_value = entropy_loss.item()
+            except Exception as e:
+                # Silently handle if entropy computation fails (e.g., wrong weight format)
+                if epoch == 0 and it == 0:
+                    print(f"Warning: MoE entropy loss computation failed: {e}")
 
         loss_value = loss.item()
 
@@ -134,6 +205,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(loss=loss_value)
         metric_logger.update(class_acc=class_acc)
         metric_logger.update(loss_scale=loss_scale_value)
+        if use_moe_entropy:
+            metric_logger.update(moe_entropy_loss=entropy_loss_value)
         min_lr = 10.
         max_lr = 0.
         for group in optimizer.param_groups:
@@ -154,6 +227,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             log_writer.update(train_loss=loss_value, step=it)
             if class_acc is not None:
                 log_writer.update(train_acc=class_acc, step=it)
+
+            # Log MoE entropy loss if enabled
+            if use_moe_entropy:
+                log_writer.update(moe_entropy_loss=entropy_loss_value, head="moe", step=it)
 
             # Log optimization metrics
             log_writer.update(loss_scale=loss_scale_value, head="opt", step=it)

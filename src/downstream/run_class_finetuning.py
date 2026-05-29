@@ -45,10 +45,10 @@ import modeling_finetune
 # import imagenet_a_r_indices  # Not needed for basic functionality
 
 # CRITICAL FIX: Import VisionTransformerMIM from training code (same as k-NN and linear eval)
-# This ensures identical Block, Attention, and MLP implementations
+# This ensures identical Block, Attention, MLP, and MoE implementations
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from models.vision_transformer import VisionTransformerMIM
+from models.vision_transformer_mim import VisionTransformerMIM
 
 
 def get_args():
@@ -302,6 +302,15 @@ def get_args():
         "--disable_weight_decay_on_rel_pos_bias", action="store_true", default=False
     )
 
+    # MoE finetuning options (based on ST-MoE and FLAN-MoE research)
+    # See: https://arxiv.org/abs/2202.08906 (ST-MoE) and FLAN-MoE paper
+    parser.add_argument('--freeze_moe_routing', action='store_true', default=False,
+                        help='Freeze MoE routing parameters (phi, scale) during finetuning. '
+                             'Prevents routing collapse observed when entropy regularization is removed.')
+    parser.add_argument('--moe_entropy_weight', type=float, default=0.0,
+                        help='Weight for dispatch entropy loss during finetuning (0=disabled). '
+                             'Maintains routing diversity. Recommended: 1.0-2.5 (pretraining used 5.0)')
+
     # Dataset parameters
     parser.add_argument(
         "--data_path",
@@ -402,18 +411,20 @@ def get_args():
     return parser.parse_args(), ds_init
 
 
-def get_models(args, use_abs_pos_emb=None, use_rel_pos_bias=None, use_shared_rel_pos_bias=None):
+def get_models(args, use_moe=False, moe_cfg=None, use_abs_pos_emb=None, use_rel_pos_bias=None, use_shared_rel_pos_bias=None):
     """
-    Build model for finetuning.
+    Build model for finetuning with optional MoE support.
 
     Args:
         args: Command-line arguments
+        use_moe: Whether to use Soft MoE architecture
+        moe_cfg: MoE configuration dict from checkpoint config
         use_abs_pos_emb: Whether to use absolute position embeddings (from checkpoint config)
         use_rel_pos_bias: Whether to use relative position bias (from checkpoint config)
         use_shared_rel_pos_bias: Whether to use shared relative position bias (from checkpoint config)
 
     Returns:
-        Model with correct architecture
+        Model with correct architecture (MoE or standard)
     """
     # Use checkpoint config values if provided, otherwise fall back to args
     abs_pos_emb = use_abs_pos_emb if use_abs_pos_emb is not None else args.abs_pos_emb
@@ -421,7 +432,7 @@ def get_models(args, use_abs_pos_emb=None, use_rel_pos_bias=None, use_shared_rel
     shared_rel_pos_bias = use_shared_rel_pos_bias if use_shared_rel_pos_bias is not None else False
 
     # CRITICAL FIX: Use VisionTransformerMIM from training code (same as k-NN and linear eval)
-    # This ensures identical Block, Attention, and MLP implementations
+    # This ensures identical Block, Attention, MLP, and MoE implementations
     model = VisionTransformerMIM(
         img_size=args.input_size,
         patch_size=16,  # Standard patch size for ViT-Base
@@ -436,8 +447,15 @@ def get_models(args, use_abs_pos_emb=None, use_rel_pos_bias=None, use_shared_rel
         init_values=args.layer_scale_init_value,
         # Position embedding config from checkpoint
         use_abs_pos_emb=abs_pos_emb,
+        use_sincos_pos_emb=moe_cfg.get("use_sincos_pos_emb", False) if moe_cfg else False,
         use_rel_pos_bias=rel_pos_bias,
         use_shared_rel_pos_bias=shared_rel_pos_bias,
+        # MoE parameters (backward compatible - ignored if use_soft_moe=False)
+        use_soft_moe=use_moe,
+        moe_num_experts=moe_cfg.get("moe_num_experts", 2) if moe_cfg else 2,
+        moe_slots_per_expert=moe_cfg.get("moe_slots_per_expert", 1) if moe_cfg else 1,
+        moe_mlp_ratio=moe_cfg.get("moe_mlp_ratio", 4.0) if moe_cfg else 4.0,
+        moe_placement=moe_cfg.get("moe_placement", "alternating") if moe_cfg else "alternating",
         # Finetuning parameters
         num_classes=args.nb_classes,
         use_mean_pooling=args.use_mean_pooling,
@@ -497,7 +515,7 @@ def main(args, ds_init):
         wandb_name = utils.derive_wandb_name_from_checkpoint(args.finetune, "fin")
         log_writer = utils.WandbLogger(
             project_name="MEDiC_finetune",
-            entity=None,  # Set to your W&B entity
+            entity="utk-iccv23",
             config=vars(args),
             name=wandb_name
         )
@@ -540,7 +558,10 @@ def main(args, ds_init):
             num_classes=args.nb_classes,
         )
 
-    # Load config from checkpoint folder to detect architecture settings
+    # Load config from checkpoint folder to detect MoE architecture
+    # CRITICAL: This ensures model architecture matches checkpoint
+    use_moe = False
+    moe_cfg = None
     use_abs_pos_emb = args.abs_pos_emb  # Default from args
     use_rel_pos_bias = args.rel_pos_bias  # Default from args
     use_shared_rel_pos_bias = False  # Default value
@@ -553,6 +574,8 @@ def main(args, ds_init):
                 cfg = yaml.safe_load(f)
 
             student_cfg = cfg.get("model", {}).get("student", {})
+            use_moe = student_cfg.get("use_soft_moe", False)
+            moe_cfg = student_cfg
 
             # CRITICAL: Load position embedding config from checkpoint to match training
             use_abs_pos_emb = student_cfg.get("use_abs_pos_emb", args.abs_pos_emb)
@@ -560,13 +583,20 @@ def main(args, ds_init):
             use_shared_rel_pos_bias = student_cfg.get("use_shared_rel_pos_bias", False)
 
             if utils.is_main_process():
+                if use_moe:
+                    print(f"Detected MoE checkpoint with {student_cfg.get('moe_num_experts', 2)} experts")
+                    print(f"  Placement: {student_cfg.get('moe_placement', 'alternating')}")
+                    print(f"  Slots per expert: {student_cfg.get('moe_slots_per_expert', 1)}")
+                else:
+                    print("Detected standard (non-MoE) checkpoint")
+
                 # Print position embedding configuration
                 print(f"Position embedding configuration:")
                 print(f"  Absolute pos emb: {use_abs_pos_emb}")
                 print(f"  Relative pos bias: {use_rel_pos_bias}")
                 print(f"  Shared rel pos bias: {use_shared_rel_pos_bias}")
 
-    model = get_models(args,
+    model = get_models(args, use_moe=use_moe, moe_cfg=moe_cfg,
                       use_abs_pos_emb=use_abs_pos_emb, use_rel_pos_bias=use_rel_pos_bias,
                       use_shared_rel_pos_bias=use_shared_rel_pos_bias)
 
@@ -663,6 +693,7 @@ def main(args, ds_init):
 
             # Debug: Check what keys exist after expansion
             rel_keys = [k for k in checkpoint_model.keys() if "relative_position_bias_table" in k]
+            print(f"DEBUG: After expansion, found {len(rel_keys)} relative_position_bias_table keys: {rel_keys[:3]}...")
 
         all_keys = list(checkpoint_model.keys())
         for key in all_keys:
@@ -783,11 +814,14 @@ def main(args, ds_init):
         )
         # model.load_state_dict(checkpoint_model, strict=False)
 
-        # Validate weight loading
+        # Validate weight loading for MoE architecture match
         if utils.is_main_process():
             model_state_keys = set(model.state_dict().keys())
             checkpoint_keys = set(checkpoint_model.keys())
 
+            # Check for MoE-related mismatches
+            moe_checkpoint_keys = [k for k in checkpoint_keys if 'soft_moe' in k or 'experts' in k]
+            moe_model_keys = [k for k in model_state_keys if 'soft_moe' in k or 'experts' in k]
             standard_checkpoint_keys = [k for k in checkpoint_keys if 'mlp.fc1' in k or 'mlp.fc2' in k]
             standard_model_keys = [k for k in model_state_keys if 'mlp.fc1' in k or 'mlp.fc2' in k]
 
@@ -795,12 +829,58 @@ def main(args, ds_init):
             print(f"Weight Loading Validation")
             print(f"{'='*80}")
 
-            if standard_checkpoint_keys and standard_model_keys:
+            # FIXED: Check for actual mismatches, not just presence of both types
+            # (alternating placement has BOTH MoE and standard blocks)
+            has_checkpoint_moe = len(moe_checkpoint_keys) > 0
+            has_model_moe = len(moe_model_keys) > 0
+            has_checkpoint_standard = len(standard_checkpoint_keys) > 0
+            has_model_standard = len(standard_model_keys) > 0
+
+            # Mismatch cases
+            if has_checkpoint_moe and not has_model_moe:
+                print(f"CRITICAL ERROR: Architecture mismatch detected!")
+                print(f"  Checkpoint contains {len(moe_checkpoint_keys)} MoE parameters")
+                print(f"  Model has NO MoE parameters (only {len(standard_model_keys)} standard)")
+                print(f"  You are finetuning with RANDOM WEIGHTS in MoE layers!")
+                print(f"\n  Example MoE keys in checkpoint:")
+                for key in moe_checkpoint_keys[:5]:
+                    print(f"    - {key}")
+            elif not has_checkpoint_moe and has_model_moe:
+                print(f"CRITICAL ERROR: Architecture mismatch detected!")
+                print(f"  Checkpoint has NO MoE parameters (only {len(standard_checkpoint_keys)} standard)")
+                print(f"  Model expects {len(moe_model_keys)} MoE parameters")
+                print(f"  You are finetuning with RANDOM WEIGHTS in MoE layers!")
+            # Match cases
+            elif has_checkpoint_moe and has_model_moe:
+                print(f"SUCCESS: MoE architecture match!")
+                print(f"  Checkpoint: {len(moe_checkpoint_keys)} MoE params, {len(standard_checkpoint_keys)} standard params")
+                print(f"  Model:      {len(moe_model_keys)} MoE params, {len(standard_model_keys)} standard params")
+            elif has_checkpoint_standard and has_model_standard and not has_checkpoint_moe and not has_model_moe:
                 print(f"SUCCESS: Standard architecture match!")
                 print(f"  Checkpoint and model both use standard MLPs ({len(standard_checkpoint_keys)} parameters)")
             else:
                 print(f"WARNING: Could not determine architecture type")
 
+            print(f"{'='*80}\n")
+
+    # =========================================================================
+    # MoE ROUTING FREEZE (prevents routing collapse during finetuning)
+    # Evidence: ST-MoE and FLAN-MoE show freezing routing improves finetuning
+    # =========================================================================
+    if args.freeze_moe_routing and use_moe:
+        frozen_count = 0
+        frozen_params = []
+        for name, param in model.named_parameters():
+            if '.phi' in name or '.scale' in name:
+                param.requires_grad = False
+                frozen_count += 1
+                frozen_params.append(name)
+        if utils.is_main_process():
+            print(f"{'='*80}")
+            print(f"[MoE Finetuning] Frozen {frozen_count} routing parameters (phi, scale)")
+            print(f"  Rationale: ST-MoE/FLAN-MoE show freezing routing improves finetuning")
+            for p in frozen_params:
+                print(f"    - {p}")
             print(f"{'='*80}\n")
 
     model.to(device)
@@ -961,6 +1041,7 @@ def main(args, ds_init):
             wd_schedule_values=wd_schedule_values,
             num_training_steps_per_epoch=num_training_steps_per_epoch,
             update_freq=args.update_freq,
+            moe_entropy_weight=args.moe_entropy_weight,  # MoE finetuning stability
         )
 
         if args.output_dir and args.save_ckpt:
@@ -1045,7 +1126,7 @@ def main(args, ds_init):
                 log_writer.update(epoch=epoch, step=global_step)
                 if "class_acc" in train_stats:
                     log_writer.update(train_acc_epoch=train_stats["class_acc"], step=global_step)
-
+                    
             log_stats = {
                 **{f"train_{k}": v for k, v in train_stats.items()},
                 # **{f'test_{k}': v for k, v in test_stats.items()},

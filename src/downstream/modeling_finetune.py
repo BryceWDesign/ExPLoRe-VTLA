@@ -23,7 +23,9 @@ import torch.nn.functional as F
 from timm.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 
-from src.models.soft_moe import SoftMoELayer
+# Add parent directory to path to import soft_moe from src/models
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from models.soft_moe import SoftMoELayer
 
 
 def register_model_safe(func):

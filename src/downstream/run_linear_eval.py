@@ -30,7 +30,7 @@ from timm.models import create_model
 # Import VisionTransformerMIM from training code (same as k-NN uses)
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from models.vision_transformer import VisionTransformerMIM
+from models.vision_transformer_mim import VisionTransformerMIM
 
 
 
@@ -96,20 +96,53 @@ def load_model(model, checkpoint_file, model_key, model_filter_name, is_cmae=Fal
 
     utils.load_state_dict(model, checkpoint_model, prefix="")
 
-    # Validate weight loading
+    # Validate weight loading for MoE architecture match
     model_state_keys = set(model.state_dict().keys())
     checkpoint_keys = set(checkpoint_model.keys())
-    loaded = model_state_keys & checkpoint_keys
-    missing = model_state_keys - checkpoint_keys
-    unexpected = checkpoint_keys - model_state_keys
 
-    print(f"\n{'='*60}")
-    print(f"Weight Loading: {len(loaded)} loaded, {len(missing)} missing, {len(unexpected)} unexpected")
-    if missing:
-        print(f"  Missing (first 5): {list(missing)[:5]}")
-    if unexpected:
-        print(f"  Unexpected (first 5): {list(unexpected)[:5]}")
-    print(f"{'='*60}\n")
+    # Check for MoE-related mismatches
+    moe_checkpoint_keys = [k for k in checkpoint_keys if 'soft_moe' in k or 'experts' in k]
+    moe_model_keys = [k for k in model_state_keys if 'soft_moe' in k or 'experts' in k]
+    standard_checkpoint_keys = [k for k in checkpoint_keys if 'mlp.fc1' in k or 'mlp.fc2' in k]
+    standard_model_keys = [k for k in model_state_keys if 'mlp.fc1' in k or 'mlp.fc2' in k]
+
+    print(f"\n{'='*80}")
+    print(f"Weight Loading Validation")
+    print(f"{'='*80}")
+
+    # FIXED: Check for actual mismatches, not just presence of both types
+    # (alternating placement has BOTH MoE and standard blocks)
+    has_checkpoint_moe = len(moe_checkpoint_keys) > 0
+    has_model_moe = len(moe_model_keys) > 0
+    has_checkpoint_standard = len(standard_checkpoint_keys) > 0
+    has_model_standard = len(standard_model_keys) > 0
+
+    # Mismatch cases
+    if has_checkpoint_moe and not has_model_moe:
+        print(f"CRITICAL ERROR: Architecture mismatch detected!")
+        print(f"  Checkpoint contains {len(moe_checkpoint_keys)} MoE parameters")
+        print(f"  Model has NO MoE parameters (only {len(standard_model_keys)} standard)")
+        print(f"  You are evaluating with RANDOM WEIGHTS in MoE layers!")
+        print(f"\n  Example MoE keys in checkpoint:")
+        for key in moe_checkpoint_keys[:5]:
+            print(f"    - {key}")
+    elif not has_checkpoint_moe and has_model_moe:
+        print(f"CRITICAL ERROR: Architecture mismatch detected!")
+        print(f"  Checkpoint has NO MoE parameters (only {len(standard_checkpoint_keys)} standard)")
+        print(f"  Model expects {len(moe_model_keys)} MoE parameters")
+        print(f"  You are evaluating with RANDOM WEIGHTS in MoE layers!")
+    # Match cases
+    elif has_checkpoint_moe and has_model_moe:
+        print(f"SUCCESS: MoE architecture match!")
+        print(f"  Checkpoint: {len(moe_checkpoint_keys)} MoE params, {len(standard_checkpoint_keys)} standard params")
+        print(f"  Model:      {len(moe_model_keys)} MoE params, {len(standard_model_keys)} standard params")
+    elif has_checkpoint_standard and has_model_standard and not has_checkpoint_moe and not has_model_moe:
+        print(f"SUCCESS: Standard architecture match!")
+        print(f"  Checkpoint and model both use standard MLPs ({len(standard_checkpoint_keys)} parameters)")
+    else:
+        print(f"WARNING: Could not determine architecture type")
+
+    print(f"{'='*80}\n")
 
     # raise ValueError("Testing")
 
@@ -126,7 +159,7 @@ def eval_linear(args):
         wandb_name = utils.derive_wandb_name_from_checkpoint(args.pretrained_weights, "lin")
         log_writer = utils.WandbLogger(
             project_name="MEDiC_linear",
-            entity=None,  # Set to your W&B entity
+            entity="utk-iccv23",
             config=vars(args),
             name=wandb_name
         )
@@ -173,10 +206,12 @@ def eval_linear(args):
     )
     print(f"Data loaded with {len(dataset_train)} train and {len(dataset_val)} val imgs.")
 
-    # ============ Load config from checkpoint folder ... ============
-    use_abs_pos_emb = args.abs_pos_emb
-    use_rel_pos_bias = args.rel_pos_bias
-    student_cfg = {}
+    # ============ Load config to detect MoE architecture ... ============
+    # CRITICAL: This ensures model architecture matches checkpoint
+    use_moe = False
+    moe_cfg = {}
+    use_abs_pos_emb = args.abs_pos_emb  # Default from args
+    use_rel_pos_bias = args.rel_pos_bias  # Default from args
     checkpoint_folder = os.path.dirname(args.pretrained_weights)
     config_files = glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
     if config_files:
@@ -185,6 +220,8 @@ def eval_linear(args):
             cfg = yaml.safe_load(f)
 
         student_cfg = cfg.get("model", {}).get("student", {})
+        use_moe = student_cfg.get("use_soft_moe", False)
+        moe_cfg = student_cfg
 
         # CRITICAL: Load position embedding config from checkpoint to match training
         use_abs_pos_emb = student_cfg.get("use_abs_pos_emb", args.abs_pos_emb)
@@ -202,6 +239,14 @@ def eval_linear(args):
         qkv_bias = has_qkv_bias  # True if checkpoint has q_bias weights
 
         if utils.get_rank() == 0:
+            if use_moe:
+                print(f"Detected MoE checkpoint with {student_cfg.get('moe_num_experts', 2)} experts")
+                print(f"  Placement: {student_cfg.get('moe_placement', 'alternating')}")
+                print(f"  Slots per expert: {student_cfg.get('moe_slots_per_expert', 1)}")
+            else:
+                print("Detected standard (non-MoE) checkpoint")
+
+            # Print position embedding configuration
             print(f"Position embedding configuration:")
             print(f"  Absolute pos emb: {use_abs_pos_emb}")
             print(f"  Relative pos bias: {use_rel_pos_bias}")
@@ -218,7 +263,7 @@ def eval_linear(args):
         qkv_bias = args.qkv_bias
 
     # CRITICAL FIX: Use VisionTransformerMIM from training code (same as k-NN)
-    # This ensures identical Block, Attention, and MLP implementations
+    # This ensures identical Block, Attention, MLP, and MoE implementations
     model = VisionTransformerMIM(
         img_size=student_cfg.get("img_size", 224),
         patch_size=student_cfg.get("patch_size", 16),
@@ -234,6 +279,12 @@ def eval_linear(args):
         use_sincos_pos_emb=student_cfg.get("use_sincos_pos_emb", False),
         use_rel_pos_bias=use_rel_pos_bias,
         use_shared_rel_pos_bias=use_shared_rel_pos_bias,
+        # MoE parameters (backward compatible - ignored if use_soft_moe=False)
+        use_soft_moe=use_moe,
+        moe_num_experts=moe_cfg.get("moe_num_experts", 2),
+        moe_slots_per_expert=moe_cfg.get("moe_slots_per_expert", 1),
+        moe_mlp_ratio=moe_cfg.get("moe_mlp_ratio", 4.0),
+        moe_placement=moe_cfg.get("moe_placement", "alternating"),
     )
 
     model.cuda()
@@ -246,6 +297,7 @@ def eval_linear(args):
                model_filter_name=args.model_filter_name,
                is_cmae=args.is_cmae)
 
+    # DEBUG: Check for NaN in model weights
     nan_params = []
     for name, param in model.named_parameters():
         if torch.isnan(param).any():
@@ -257,14 +309,16 @@ def eval_linear(args):
     else:
         print("\n✅ All model parameters are finite (no NaN)")
 
+    # DEBUG: Check pos_embed values
     if hasattr(model, 'pos_embed') and model.pos_embed is not None:
+        print(f"\n[DEBUG] pos_embed statistics:")
         print(f"  Shape: {model.pos_embed.shape}")
         print(f"  min={model.pos_embed.min():.6f}, max={model.pos_embed.max():.6f}")
         print(f"  mean={model.pos_embed.mean():.6f}, std={model.pos_embed.std():.6f}")
         if torch.allclose(model.pos_embed, torch.zeros_like(model.pos_embed)):
             print(f"  ⚠️ WARNING: pos_embed is all zeros!")
     else:
-        print(f"  No pos_embed attribute")
+        print(f"\n[DEBUG] pos_embed is None")
 
     linear_classifier = LinearClassifier(
         dim=model.embed_dim * (1 + int(args.avgpool_patchtokens)),
@@ -404,13 +458,15 @@ def train(model, linear_classifier, optimizer, loader, epoch, avgpool, amp_forwa
     assert avgpool
     module = linear_classifier.module if hasattr(linear_classifier, 'module') else linear_classifier
 
-    first_batch = True
+    first_batch = True  # DEBUG flag
     for (inp, target) in metric_logger.log_every(loader, 20, header):
         # move to gpu
         inp = inp.cuda(non_blocking=True)
         target = target.cuda(non_blocking=True)
 
+        # DEBUG: Check input data (only first batch)
         if first_batch and torch.distributed.get_rank() == 0:
+            print(f"\n[DEBUG] Input data:")
             print(f"  Shape: {inp.shape}")
             print(f"  min={inp.min():.4f}, max={inp.max():.4f}, mean={inp.mean():.4f}")
             print(f"  Has NaN: {torch.isnan(inp).any()}")
@@ -431,7 +487,9 @@ def train(model, linear_classifier, optimizer, loader, epoch, avgpool, amp_forwa
                 concat_features = torch.cat((cls_rep, mean_rep), dim=-1).float()
                 output.append(concat_features)
 
+                # DEBUG: Check for NaN/Inf in features (only first batch, first layer)
                 if first_batch and i == 0 and torch.distributed.get_rank() == 0:
+                    print(f"\n[DEBUG] Layer {i} features:")
                     print(f"  CLS: min={cls_rep.min():.4f}, max={cls_rep.max():.4f}, mean={cls_rep.mean():.4f}")
                     print(f"  Mean: min={mean_rep.min():.4f}, max={mean_rep.max():.4f}, mean={mean_rep.mean():.4f}")
                     print(f"  Concat: min={concat_features.min():.4f}, max={concat_features.max():.4f}")
@@ -440,7 +498,9 @@ def train(model, linear_classifier, optimizer, loader, epoch, avgpool, amp_forwa
 
         output = linear_classifier(output)
 
+        # DEBUG: Check logits (only first batch)
         if first_batch and torch.distributed.get_rank() == 0:
+            print(f"\n[DEBUG] Logits layer 0:")
             print(f"  min={output[0].min():.4f}, max={output[0].max():.4f}, mean={output[0].mean():.4f}")
             print(f"  Has NaN: {torch.isnan(output[0]).any()}")
             print(f"  Has Inf: {torch.isinf(output[0]).any()}")
@@ -451,7 +511,9 @@ def train(model, linear_classifier, optimizer, loader, epoch, avgpool, amp_forwa
         for i, each_output in enumerate(output):
             layer_loss = nn.CrossEntropyLoss()(each_output, target)
 
+            # DEBUG: Check loss (only first batch, first layer)
             if first_batch and i == 0 and torch.distributed.get_rank() == 0:
+                print(f"\n[DEBUG] Loss layer {i}: {layer_loss.item()}")
                 print(f"  Is NaN: {torch.isnan(layer_loss)}")
             loss += layer_loss
             
@@ -464,8 +526,6 @@ def train(model, linear_classifier, optimizer, loader, epoch, avgpool, amp_forwa
                 acc1, = utils.accuracy(each_output, target, topk=(1,))
                 metric_logger.meters[f'acc1_layer{i}'].update(acc1.item(), n=batch_size)
 
-        first_batch = False
-
         # compute the gradients
         optimizer.zero_grad()
         loss.backward()
@@ -477,6 +537,7 @@ def train(model, linear_classifier, optimizer, loader, epoch, avgpool, amp_forwa
         torch.cuda.synchronize()
         metric_logger.update(loss=loss.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        first_batch = False  # DEBUG: reset flag after first batch
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
