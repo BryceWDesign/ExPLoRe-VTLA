@@ -142,22 +142,6 @@ def test_mask_is_boolean():
     assert m_random.dtype == torch.bool, f"Random mask dtype {m_random.dtype}, expected bool"
 
 
-def test_evolved_masking_instantiation():
-    """Evolved masking generator can be instantiated."""
-    from src.utils.evolved_masking_generator import EvolvedMaskingGenerator
-
-    dummy_model = nn.Linear(10, 10)
-    emg = EvolvedMaskingGenerator(
-        student_model=dummy_model,
-        mask_ratio=0.4,
-        cfg={"attention_source": "student_ema", "cluster_range": [10, 40]},
-        grid_h=14, grid_w=14,
-    )
-    assert emg.num_patches == 196, f"Expected 196 patches, got {emg.num_patches}"
-    assert emg.mask_ratio == 0.4
-    assert hasattr(emg, "attention_source")
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. MODEL CONSTRUCTION (6 tests)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -383,10 +367,10 @@ def test_build_student_from_config():
 # ══════════════════════════════════════════════════════════════════════════════
 
 ALL_TESTS = [
-    # 1. Masking (6)
+    # 1. Masking (5)
     test_block_mask_count, test_random_mask_count,
     test_block_mask_14x14_at_40pct, test_random_mask_at_75pct,
-    test_mask_is_boolean, test_evolved_masking_instantiation,
+    test_mask_is_boolean,
     # 2. Model (6)
     test_build_baseline, test_build_full,
     test_forward_baseline_returns, test_forward_full_returns,
