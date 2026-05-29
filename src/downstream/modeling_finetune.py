@@ -23,9 +23,12 @@ import torch.nn.functional as F
 from timm.layers import drop_path, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 
-# Add parent directory to path to import soft_moe from src/models
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from models.soft_moe import SoftMoELayer
+# Add project root to sys.path so `src.models.soft_moe` resolves as a package.
+# Using project root (..,..) rather than just src/ (..) keeps `src` as a proper
+# package, which is required because decoder_mae uses `from ..utils.pos_embed`
+# relative imports that need `src.models.decoder_mae` as the fully-qualified name.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from src.models.soft_moe import SoftMoELayer
 
 
 def register_model_safe(func):
