@@ -29,8 +29,8 @@ from timm.models import create_model
 
 # Import VisionTransformerMIM from training code (same as k-NN uses)
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from models.vision_transformer_mim import VisionTransformerMIM
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from src.models.vision_transformer_mim import VisionTransformerMIM
 
 
 

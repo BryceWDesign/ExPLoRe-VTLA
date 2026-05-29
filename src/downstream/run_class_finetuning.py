@@ -47,8 +47,8 @@ import modeling_finetune
 # CRITICAL FIX: Import VisionTransformerMIM from training code (same as k-NN and linear eval)
 # This ensures identical Block, Attention, MLP, and MoE implementations
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from models.vision_transformer_mim import VisionTransformerMIM
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from src.models.vision_transformer_mim import VisionTransformerMIM
 
 
 def get_args():
