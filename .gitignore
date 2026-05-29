@@ -29,7 +29,6 @@ wandb/
 logs/
 
 # W&B artifacts
-run_mappings.json
 
 # Data (not committed)
 data/
@@ -45,7 +44,6 @@ datasets/
 *.tar
 
 # Internal docs and local settings (not for public)
-docs/
 local/
 
 # Testing

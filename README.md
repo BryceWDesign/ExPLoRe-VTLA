@@ -1,54 +1,42 @@
-# MEDiC: Multi-objective Exploration of Distillation from CLIP
+# ExPLoRe: Expert Patch-Level Loss Routing for Multi-Objective Masked Image Modeling
 
-**Official PyTorch implementation of ["MEDiC: Multi-objective Exploration of Distillation from CLIP"](https://arxiv.org/abs/2603.29009).**
+**Official PyTorch implementation of the ECCV 2026 ExPLoRe paper.**
 
-MEDiC extends masked image modeling with CLIP distillation by combining three complementary training objectives: token distillation, CLS token alignment, and pixel reconstruction. We show that jointly optimizing these objectives produces stronger visual representations than any single objective alone, achieving 73.92% k-NN accuracy on ImageNet-1K with a ViT-Base student.
+ExPLoRe repurposes Soft Mixture of Experts (MoE) dispatch weights as **learned, per-patch loss coefficients** for multi-objective masked image modeling. The key mechanism is **loss-coupling**: loss gradients flow through dispatch weights to the router, enabling content-dependent specialization where different patches receive different emphases across training objectives. With ViT-Base + CLIP-B/16 teacher, ExPLoRe reaches **80.6% linear probe** and **85.3% finetuning** accuracy on ImageNet-1K, competitive with state-of-the-art at lower inference FLOPs.
 
-**[Pre-trained Weights](https://huggingface.co/drkostas/MEDiC-ViT-Base)** | **[Paper](https://arxiv.org/abs/2603.29009)** | **[MaskDistill Base](https://github.com/drkostas/MaskDistill-PyTorch)** | <a href="https://huggingface.co/spaces/drkostas/MEDiC-Evolved-Masking"><img src="https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg" alt="Open in Spaces"></a>
+**[Paper](https://arxiv.org/abs/TODO)** | **[MEDiC (no-MoE baseline)](https://github.com/aicip/MEDiC)** | **[MaskDistill-PyTorch](https://github.com/drkostas/MaskDistill-PyTorch)**
 
-## Key Results (ViT-B/16, ImageNet-1K)
+---
 
-| Evaluation | Result |
-|------------|:------:|
-| k-NN (k=10) | **73.92%** |
-| Linear Probe (top-1) | **60.50%** |
-| Finetuning (top-1) | **85.07%** |
-| Sem. Seg. (mIoU, ADE20K) | **52.5** |
+## Key Results
 
-### Loss Ablation (Table 4)
+ViT-Base/16, ImageNet-1K, 300 epochs, frozen CLIP ViT-B/16 teacher:
 
-| Training Objectives | k-NN |
-|---------------------|:----:|
-| Token only (MaskDistill baseline) | 68.6% |
-| Token + Pixel | 71.4% |
-| Token + CLS | 72.3% |
-| Token + Pixel + CLS (MEDiC) | **73.92%** |
+| Model | Experts | Params | kNN | Linear | Finetune | mIoU (ADE20K) |
+|---|---:|---:|---:|---:|---:|---:|
+| **MEDiC (no-MoE baseline)** | — | 86M | 75.7 | 76.2 | 84.8 | 50.8 |
+| **ExPLoRe (practical)** | 2 | 116M | 75.4 | 79.6 | 84.1 | 51.1* |
+| **ExPLoRe (SOTA)** | 64 | 1.86B | 76.2 | **80.6** | **85.3** | **52.8** |
 
-Each additional objective provides complementary learning signals: pixel reconstruction encourages fine-grained spatial features, while CLS alignment captures global semantic structure.
+\* with FR+FA+ExD adaptation recipe (paper Tab. 4.8)
 
-## Overview
+### Mechanism isolation (paper Tab. 4.5)
 
-MEDiC combines masked image modeling with knowledge distillation from a frozen CLIP teacher using three loss terms:
+| Ablation | kNN | Δ |
+|---|---:|---:|
+| ExPLoRe E=2 (default) | 75.4 | — |
+| − loss-coupling (detach) | 73.8 | −1.6 |
+| Combine weights (no entropy reg) | 2.1 | −73.3 |
 
-1. **Token Distillation (L_head)**: Smooth L1 loss between student predictions and CLIP teacher features on masked positions
-2. **CLS Alignment (L_cls)**: Cosine similarity between student and teacher CLS token embeddings
-3. **Pixel Reconstruction (L_pix)**: L2 loss from an MAE-style decoder reconstructing normalized pixel patches
+The **detach ablation** confirms loss-coupling is the core mechanism, not just adding MoE capacity.
 
-The total loss is: `L_total = w_head * L_head + w_cls * L_cls + w_pix * L_pix`
+---
 
-Additionally, MEDiC introduces **Evolved Part Masking with Hierarchical Clustering**, which progressively transitions from spatial to semantic masking using the CLIP teacher's attention patterns for part discovery.
-
-<p align="center">
-  <img src="assets/architecture.png" alt="MEDiC Architecture" width="100%">
-</p>
-
-The bottom-right panel shows the full MEDiC framework with all three loss paths (Similarity 1 = token distillation, Similarity 2 = CLS alignment, Similarity 3 = pixel reconstruction).
-
-## Installation
+## Setup
 
 ```bash
-git clone https://github.com/aicip/MEDiC.git
-cd MEDiC
+git clone https://github.com/aicip/ExPLoRe.git
+cd ExPLoRe
 
 python -m venv .venv
 source .venv/bin/activate
@@ -57,258 +45,159 @@ pip install -r requirements.txt
 
 **Requirements:** Python 3.10+, PyTorch 2.1+, CUDA 11.8+.
 
-For downstream evaluation (semantic segmentation and object detection), also install:
+For semantic segmentation:
 ```bash
-# Requires Python 3.12 or earlier (mmcv-full does not support 3.13+)
 pip install mmcv-full==1.7.2 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.4/index.html
-pip install mmsegmentation==0.30.0 mmdetection==2.28.2
+pip install mmsegmentation==0.30.0
 ```
 
-## Setup
+### Dataset paths
 
-### 1. Dataset Paths
-
-Download [ImageNet-1K](https://image-net.org/) and organize as:
+Download ImageNet-1K and organize as:
 ```
 /path/to/imagenet/
-├── train/
-│   ├── n01440764/
-│   └── ...
-└── val/
-    ├── n01440764/
-    └── ...
+├── train/{class_name}/...
+└── val/{class_name}/...
 ```
 
-Update data paths in config files:
-- **Pretrain configs** (`configs/pretrain*.yaml`): Set `data.data_path`, `data.train_dir`, `data.val_dir`
-- **Semseg config** (`src/downstream/segmentation/configs/`): Set `data_root` to your [ADE20K](http://sceneparsing.csail.mit.edu/) path
-- **Detection config** (`src/downstream/detection/configs/`): Set `data_root` to your [COCO](https://cocodataset.org/) path
+Then edit the `data.train_dir` and `data.val_dir` fields in `configs/pretrain_explore_2exp.yaml` (and `_64exp.yaml`).
 
-### 2. SLURM Configuration (for cluster users)
+---
 
-All scripts in `scripts/` have placeholders you must configure for your cluster:
+## Reproducing the paper
+
+### Smoke test (validate setup works, ~30 min on 1 GPU)
+
 ```bash
-#SBATCH -A YOUR_ACCOUNT       # Your SLURM account
-#SBATCH --qos=YOUR_QOS        # Your QoS (e.g., normal, high)
-#SBATCH --partition=YOUR_PARTITION  # Your partition (e.g., gpu, a100)
+sbatch scripts/smoke_train_real.sh configs/pretrain_explore_smoke.yaml
 ```
 
-Also uncomment and adjust the module loads:
-```bash
-# module load cuda   # Uncomment and set your CUDA module
-# module load cudnn  # Uncomment and set your cuDNN module
-```
-
-### 3. Weights & Biases (optional)
-
-W&B logging is enabled by default. Set your entity in your config:
-```yaml
-wandb_meta:
-  entity: your-wandb-entity  # or null to use default
-```
-
-To disable W&B: `WANDB_MODE=disabled python -m src.train ...`
-
-## Pre-trained Weights
-
-Ablation checkpoints are available on [HuggingFace](https://huggingface.co/drkostas/MEDiC-ViT-Base). Full MEDiC checkpoint (all 3 losses) coming soon.
-
-| Checkpoint | Config | k-NN | Download |
-|-----------|--------|------|----------|
-| Token + CLS (E200) | `pretrain_token_cls.yaml` | 73.86% | [backbone](https://huggingface.co/drkostas/MEDiC-ViT-Base/resolve/main/token_cls_vit_base_e200.pth) / [full](https://huggingface.co/drkostas/MEDiC-ViT-Base/resolve/main/token_cls_full_e200.pth) |
-| Token + Pixel (E299) | `pretrain_token_pixel.yaml` | 71.05% | [backbone](https://huggingface.co/drkostas/MEDiC-ViT-Base/resolve/main/token_pixel_vit_base_e299.pth) / [full](https://huggingface.co/drkostas/MEDiC-ViT-Base/resolve/main/token_pixel_full_e299.pth) |
-| MEDiC full (all 3 losses) | `pretrain_medic.yaml` | 73.92% | Coming soon |
-
-## Usage
+This trains the 2-expert model for 2 epochs on a 10-image-per-class subset and verifies all losses, dispatch routing, and checkpoint I/O work end-to-end.
 
 ### Pretraining
 
+**Practical recipe (2 experts, 116M params):**
 ```bash
-# Single node, 4 GPUs
-torchrun --nproc_per_node=4 -m src.train --cfg configs/pretrain_medic.yaml
-
-# SLURM cluster
-sbatch scripts/pretrain.sh                                    # default: pretrain_medic.yaml
-sbatch scripts/pretrain.sh configs/pretrain_baseline.yaml     # MaskDistill baseline
-sbatch scripts/pretrain.sh configs/pretrain_token_pixel.yaml  # Token + Pixel only
+sbatch scripts/pretrain.sh configs/pretrain_explore_2exp.yaml
 ```
+~1 day on 4× H100. Reaches the kNN/LP/FT numbers in the "practical" row of the table above.
 
-### k-NN Evaluation
-
+**SOTA recipe (64 experts, 1.86B params):**
 ```bash
-# Direct
-python -m src.eval_knn --cfg configs/pretrain_medic.yaml \
-    --weights_folder output/pretrain/<run_folder> --epoch 300
-
-# SLURM
-sbatch scripts/eval_knn.sh output/pretrain/<run_folder> 300
+sbatch scripts/pretrain.sh configs/pretrain_explore_64exp.yaml
 ```
+~5–7 days on 4× H100. Reaches 80.6 linear probe / 85.3 finetune.
 
-### Linear Probe
+### Downstream evaluation
 
 ```bash
-# SLURM (recommended, needs 4 GPUs, approximately 1 day for 90 epochs)
-sbatch scripts/linprobe.sh /path/to/pretrain_checkpoint.pth /path/to/imagenet
+# kNN (frozen backbone, k=20, cosine similarity)
+sbatch scripts/eval_knn.sh /path/to/checkpoint.pth
 
-# Direct (single node)
-cd src/downstream && torchrun --nproc_per_node=4 run_linear_eval.py \
-    --pretrained_weights /path/to/pretrain_checkpoint.pth \
-    --model_filter_name "module.student." \
-    --data_path /path/to/imagenet --epochs 90
+# Linear probe (frozen [CLS])
+sbatch scripts/linprobe.sh /path/to/checkpoint.pth
+
+# Full finetuning (with FR+FA+ExD recipe, paper Tab. 4.7)
+sbatch scripts/finetune.sh /path/to/checkpoint.pth
+
+# Semantic segmentation on ADE20K (UperNet, 160K iter)
+sbatch scripts/eval_semseg.sh /path/to/checkpoint.pth
 ```
 
-### Finetuning
+The default finetune config enables Freeze Routing + Freeze Attention + Expert Dropout (FR+FA+ExD, paper §4.6.3) which contributes +1.5% FT over vanilla MoE fine-tuning and +0.5% over the no-MoE baseline.
+
+### Visualizing expert specialization
+
+Reproduce paper Fig. 4.7 — per-patch dispatch-weight overlays showing the foreground/background expert split:
 
 ```bash
-# SLURM (recommended, needs 4 GPUs, approximately 1 to 2 days for 100 epochs)
-sbatch scripts/finetune.sh /path/to/pretrain_checkpoint.pth /path/to/imagenet
-
-# Direct (single node)
-cd src/downstream && torchrun --nproc_per_node=4 run_class_finetuning.py \
-    --finetune /path/to/pretrain_checkpoint.pth \
-    --model_filter_name "module.student." \
-    --data_path /path/to/imagenet \
-    --batch_size 128 --epochs 100 --lr 5e-4 --layer_decay 0.65
+python scripts/visualize_dispatch_weights.py \
+    --checkpoint output/pretrain_explore_2exp/checkpoint-299.pth \
+    --config configs/pretrain_explore_2exp.yaml \
+    --image_dir assets/sample_images/ \
+    --output_dir output/fig_4_7/ \
+    --block_idx 11
 ```
 
-### Semantic Segmentation
+The two experts learn complementary spatial specialization without any explicit supervision — Expert 0 concentrates on foreground objects, Expert 1 on background/context.
 
-See [downstream/segmentation/README.md](src/downstream/segmentation/README.md) for UPerNet evaluation on ADE20K.
+---
 
-```bash
-# SLURM eval (requires mmsegmentation)
-sbatch scripts/eval_semseg.sh /path/to/semseg_checkpoint.pth /path/to/ADEChallengeData2016
-```
+## How ExPLoRe works
 
-### Object Detection
-
-See [downstream/detection/README.md](src/downstream/detection/README.md) for Mask R-CNN evaluation on COCO.
-
-```bash
-# SLURM eval (requires mmdetection)
-sbatch scripts/eval_detection.sh /path/to/detection_checkpoint.pth /path/to/coco
-```
-
-## Configuration
-
-Six pretrain configurations are provided, corresponding to the ablation study in the paper:
-
-| Config | Training Objectives | Paper Reference |
-|--------|-------------------|-----------------|
-| `pretrain_baseline.yaml` | Token distillation only | Table 4, row 1 (68.6% kNN) |
-| `pretrain_token_pixel.yaml` | Token + Pixel reconstruction | Table 4, row 2 (71.4% kNN) |
-| `pretrain_token_cls.yaml` | Token + CLS alignment | Table 4, row 3 (72.3% kNN) |
-| `pretrain_medic.yaml` | Token + Pixel + CLS (main result) | Table 2 (73.92% kNN) |
-| `pretrain_evolved.yaml` | Token + Evolved Part Masking | Table 5 |
-| `pretrain_medic_evolved.yaml` | Token + Pixel + CLS + Evolved Masking | Full method with evolved masking |
-
-### Key Parameters
-
-```yaml
-model:
-  student:
-    use_mask_tokens: false     # Sparse mode (MAE-style, drop masked patches)
-  decoder:
-    decoder_embed_dim: 512     # Pixel decoder dimension
-    decoder_depth: 8           # Pixel decoder transformer blocks
-    decoder_num_heads: 16      # Pixel decoder attention heads
-
-losses:
-  use_head_loss: true          # Token distillation (Smooth L1)
-  use_decoder_loss: true       # Pixel reconstruction (L2)
-  use_cls_loss: true           # CLS alignment (cosine)
-  head_loss_weight: 1.0        # w_head
-  pixel_loss_weight: 1.0       # w_pix
-  cls_loss_weight: 0.4         # w_cls
-  normalize_targets: true      # LayerNorm on teacher features
-
-mask:
-  mask_type: "block"           # "block", "random", or "evolved"
-  mask_ratio: 0.40             # Fraction of patches to mask
-```
-
-## Project Structure
+ExPLoRe integrates Soft-MoE [Puigcerver et al., 2023] into a MEDiC-style multi-objective MIM framework at alternating ViT blocks `{1, 3, 5, 7, 9, 11}`. The Soft-MoE dispatch weights `D ∈ R^{B×N×E}` (softmax over patches per expert) are reused as **per-patch loss coefficients**:
 
 ```
-MEDiC/
-├── configs/
-│   ├── pretrain_baseline.yaml       # Token only (MaskDistill baseline)
-│   ├── pretrain_token_pixel.yaml    # Token + Pixel
-│   ├── pretrain_token_cls.yaml      # Token + CLS
-│   ├── pretrain_medic.yaml          # All 3 losses (main result)
-│   ├── pretrain_evolved.yaml        # Token + Evolved masking
-│   └── pretrain_medic_evolved.yaml  # All 3 + Evolved masking
+L_token = (1/B) Σ_b [ Σ_n D[b, n, expert_0] · L_smooth_l1(student_n, teacher_n) ]
+                   / Σ_n D[b, n, expert_0]
+```
+
+Because dispatch weights are differentiable, loss gradients flow back through `D` to the router parameters, enabling content-dependent specialization (paper §4.4.4). A detach ablation (Tab. 4.5) confirms loss-coupling — not just MoE capacity — is what drives the improvement.
+
+**Dispatch (not combine) weights** are used because combine weights have a degeneracy that lets the router minimize loss by zeroing all expert contributions to a patch (paper §4.4.3); dispatch weights are normalized over patches per expert so each expert must distribute its attention somewhere.
+
+---
+
+## Repo structure
+
+```
+ExPLoRe/
+├── configs/                                 # 6 YAML configs
+│   ├── pretrain_explore_2exp.yaml          # Practical 2-expert recipe
+│   ├── pretrain_explore_64exp.yaml         # SOTA 64-expert recipe
+│   ├── pretrain_explore_smoke.yaml         # Smoke test
+│   ├── finetune_explore.yaml               # Finetune w/ FR+FA+ExD defaults
+│   ├── linprobe_explore.yaml               # Linear probe
+│   └── semseg_explore.yaml                 # ADE20K UperNet
 ├── src/
 │   ├── models/
-│   │   ├── vision_transformer.py    # ViT student encoder
-│   │   ├── clip_teacher.py          # Frozen CLIP teacher wrapper
-│   │   ├── medic_model.py           # Unified model (student + head + decoder)
-│   │   └── decoder_mae.py           # MAE-style pixel reconstruction decoder
+│   │   ├── soft_moe.py                     # Soft-MoE layer (the core)
+│   │   ├── vision_transformer_mim.py       # MoE-aware ViT student
+│   │   ├── medic_model.py                  # MEDiCModel + MultiBlockWeightAggregator
+│   │   ├── clip_teacher.py                 # Frozen CLIP teacher
+│   │   └── decoder_mae.py                  # Pixel decoder (for §4.4 Token+Pixel extension)
 │   ├── utils/
-│   │   ├── losses.py                # Multi-objective loss computation
-│   │   ├── masking_generator.py     # Block and random masking
-│   │   ├── evolved_masking_generator.py  # Evolved Part Masking with HC
-│   │   ├── optim_factory.py         # AdamW + cosine scheduler
-│   │   └── viz.py                   # Training + reconstruction visualizations
-│   ├── data/
-│   │   ├── loader.py                # ImageNet data loading
-│   │   └── transforms.py           # Augmentation pipeline
-│   ├── downstream/
-│   │   ├── run_class_finetuning.py  # End-to-end finetuning
-│   │   ├── run_linear_eval.py       # Linear probe evaluation
-│   │   ├── segmentation/            # UPerNet on ADE20K (mmseg)
-│   │   └── detection/               # Mask R-CNN on COCO (mmdet)
-│   ├── train.py                     # Pretraining script
-│   └── eval_knn.py                  # k-NN evaluation
-├── scripts/                         # SLURM submission scripts
-└── tests/
+│   │   ├── losses.py                       # apply_moe_loss_weighting + compute_loss
+│   │   └── masking_generator.py            # Block masking
+│   ├── downstream/                         # Finetune, linprobe, semseg
+│   ├── train.py                            # Pretraining loop w/ MoE logging
+│   └── eval_knn.py                         # kNN evaluation
+├── scripts/                                # SLURM scripts
+└── tests/                                  # 167 CPU tests
 ```
 
-## Training Details
+---
 
-| Hyperparameter | Value |
-|---------------|-------|
-| Student Architecture | ViT-Base/16 (86M params) |
-| Teacher | Frozen CLIP ViT-B/16 |
-| Pixel Decoder | 8-block transformer (512 dim, 16 heads) |
-| Encoding Mode | Sparse (MAE-style, masked patches dropped) |
-| Masking | Block-wise, 40% ratio |
-| Epochs | 300 |
-| Batch Size | 1024 (global, 256 per GPU x 4 GPUs) |
-| Optimizer | AdamW (beta1=0.9, beta2=0.999) |
-| Learning Rate | 1.5e-3 (peak), cosine decay to 1e-5 |
-| Weight Decay | 0.05 |
-| Warmup | 10 epochs |
-| Gradient Clipping | 3.0 |
-| Precision | BFloat16 mixed precision |
-| Token Loss | Smooth L1 (beta=1.0) on LayerNorm'd CLIP features |
-| CLS Loss | Cosine similarity (weight=0.4) |
-| Pixel Loss | L2 on patch-normalized pixels (weight=1.0) |
+## Tests
+
+```bash
+CUDA_VISIBLE_DEVICES="" python -m pytest tests/ -v
+```
+
+167 tests cover: model construction, loss components, masking, soft-MoE routing axes,
+multi-block weight aggregator, MoE loss-weighting contract.
+
+---
 
 ## Citation
 
-If you find this work useful, please cite our paper:
-
 ```bibtex
-@article{georgiou2025medic,
-  title={MEDiC: Multi-objective Exploration of Distillation from CLIP},
-  author={Georgiou, Konstantinos},
-  journal={arXiv preprint arXiv:2603.29009},
-  year={2025}
+@inproceedings{georgiou2026explore,
+  title     = {ExPLoRe: Expert Patch-Level Loss Routing for Multi-Objective Masked Image Modeling},
+  author    = {Georgiou, Konstantinos and Tang, Maofeng and Qi, Hairong},
+  booktitle = {Proceedings of the European Conference on Computer Vision (ECCV)},
+  year      = {2026}
 }
 ```
 
+---
+
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
 
-## Acknowledgments
+## Acknowledgements
 
-This codebase builds on [MaskDistill-PyTorch](https://github.com/drkostas/MaskDistill-PyTorch), our reproduction of the MaskDistill paper.
-
-Additional references and dependencies:
-- [CLIP](https://github.com/openai/CLIP) by OpenAI for the frozen teacher model
-- [timm](https://github.com/huggingface/pytorch-image-models) by Ross Wightman for the ViT implementation
-- [MAE](https://github.com/facebookresearch/mae) for the sparse encoding and pixel decoder design
-- [BEiT](https://github.com/microsoft/unilm/tree/master/beit) for the ViT architecture with relative position bias
-- [Evolved Part Masking](https://arxiv.org/abs/2305.03140) (CVPR 2023) for the semantic masking strategy
+This repo extends [aicip/MEDiC](https://github.com/aicip/MEDiC) (which itself extends
+[drkostas/MaskDistill-PyTorch](https://github.com/drkostas/MaskDistill-PyTorch)).
+Soft-MoE is from [Puigcerver et al., ICLR 2024](https://arxiv.org/abs/2308.00951).
