@@ -1603,3 +1603,10 @@ def compute_three_losses(
         log_dict[k] = v.item() if hasattr(v, "item") else v
 
     return total_loss, log_dict
+
+
+# ── Backward-compat aliases (MEDiC scaffold naming) ──────────────────────────
+# Allow MEDiC-style imports (`from src.utils.losses import compute_loss, patchify`)
+# to keep working against the MEDiC_torch-ported API.
+from src.utils.utils import patchify_img as patchify  # noqa: E402, F401
+compute_loss = compute_three_losses  # noqa: E305
