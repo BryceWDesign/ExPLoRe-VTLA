@@ -114,7 +114,7 @@ Reproduce paper Fig. 4.7 — per-patch dispatch-weight overlays showing the fore
 python scripts/visualize_dispatch_weights.py \
     --checkpoint output/pretrain_explore_2exp/checkpoint-299.pth \
     --config configs/pretrain_explore_2exp.yaml \
-    --image_dir assets/sample_images/ \
+    --image_dir /path/to/your/images/ \
     --output_dir output/fig_4_7/ \
     --block_idx 11
 ```
