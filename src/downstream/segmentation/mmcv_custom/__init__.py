@@ -22,6 +22,9 @@ from .layer_decay_optimizer_constructor import LayerDecayOptimizerConstructor
 # Without this, mmseg's homonymous LayerDecayOptimizerConstructor wins over our custom
 # one and crashes with NotImplementedError on MoE params.
 from .moe_layer_decay_optimizer_constructor import MoELayerDecayOptimizerConstructor
+# These hooks register their classes via decorators; the import is the registration.
+from . import amp_optimizer_hook  # noqa: F401  registers AMPOptimizerHook
+from . import freeze_router_hook  # noqa: F401  registers FreezeRouterHook
 
 __all__ = [
     'load_checkpoint',
