@@ -57,3 +57,8 @@ images/
 
 # Screenshots
 image.png
+
+# Scrubbed from history (see audit)
+demos/evolved_masking/
+docs/CLAUDE.md
+run_mappings.json
