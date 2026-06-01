@@ -38,5 +38,8 @@ _patch_resize()
 
 from .fixed_uper_head import FixedUPerHead
 from .safe_cross_entropy_loss import SafeCrossEntropyLoss
+# Register the W&B logger override and the per-iteration logger hook
+from . import fixed_wandb_logger_hook  # noqa: F401  registers FixedWandbLoggerHook
+from . import iter_logger_hook  # noqa: F401  registers IterLoggerHook
 
 __all__ = ['FixedUPerHead', 'SafeCrossEntropyLoss']
