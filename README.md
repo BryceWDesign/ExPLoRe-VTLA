@@ -194,7 +194,7 @@ multi-block weight aggregator, MoE loss-weighting contract.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).
 
 ## Acknowledgements
 
