@@ -1,8 +1,10 @@
 #!/bin/bash
+
+# Cluster-specific SBATCH directives (account, QOS, partition) are NOT set here.
+# Pass them via the sbatch command line or a wrapper script, e.g.:
+#   sbatch --account=YOUR_ACCT --qos=YOUR_QOS --partition=YOUR_PART scripts/this.sh
+# Or set EXPLORE_SBATCH_ARGS in your .env (sourced by scripts that read it).
 #SBATCH --job-name=explore-smoke
-#SBATCH -A isaac-utk0256
-#SBATCH --qos=ai-tenn
-#SBATCH --partition=ai-tenn
 #SBATCH --export=ALL,OMP_NUM_THREADS=16
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1

@@ -1,13 +1,15 @@
 #!/bin/bash -l
+
+# Cluster-specific SBATCH directives (account, QOS, partition) are NOT set here.
+# Pass them via the sbatch command line or a wrapper script, e.g.:
+#   sbatch --account=YOUR_ACCT --qos=YOUR_QOS --partition=YOUR_PART scripts/this.sh
+# Or set EXPLORE_SBATCH_ARGS in your .env (sourced by scripts that read it).
 #SBATCH -J explore-linprobe
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --time=1-00:00:00
-#SBATCH -A isaac-utk0256
-#SBATCH --qos=ai-tenn
-#SBATCH --partition=ai-tenn
 #SBATCH --output=logs/linprobe/%x/%j.log
 #SBATCH --signal=SIGUSR1@90
 

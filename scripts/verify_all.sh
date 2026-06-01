@@ -1,4 +1,9 @@
 #!/bin/bash
+
+# Cluster-specific SBATCH directives (account, QOS, partition) are NOT set here.
+# Pass them via the sbatch command line or a wrapper script, e.g.:
+#   sbatch --account=YOUR_ACCT --qos=YOUR_QOS --partition=YOUR_PART scripts/this.sh
+# Or set EXPLORE_SBATCH_ARGS in your .env (sourced by scripts that read it).
 # ExPLoRe end-to-end verification driver
 #
 # Submits: pretrain smoke (2 epochs on subset), kNN eval, finetune (1 ep),
