@@ -38,6 +38,11 @@ model = dict(
         init_values=0.1,
         drop_path_rate=0.1,
         out_indices=[3, 5, 7, 11],
+        # MoE config — must match the ExPLoRe pretrained checkpoint
+        use_soft_moe=True,
+        moe_num_experts=2,
+        moe_slots_per_expert=1,
+        moe_placement='alternating',
     ),
     decode_head=dict(
         in_channels=[768, 768, 768, 768],
