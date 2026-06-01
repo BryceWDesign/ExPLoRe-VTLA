@@ -18,5 +18,13 @@ torch.load = _patched_torch_load
 
 from .checkpoint import load_checkpoint
 from .layer_decay_optimizer_constructor import LayerDecayOptimizerConstructor
+# Import (and thus register) the MoE-aware constructor with mmseg's OPTIMIZER_BUILDERS.
+# Without this, mmseg's homonymous LayerDecayOptimizerConstructor wins over our custom
+# one and crashes with NotImplementedError on MoE params.
+from .moe_layer_decay_optimizer_constructor import MoELayerDecayOptimizerConstructor
 
-__all__ = ['load_checkpoint', 'LayerDecayOptimizerConstructor']
+__all__ = [
+    'load_checkpoint',
+    'LayerDecayOptimizerConstructor',
+    'MoELayerDecayOptimizerConstructor',
+]
