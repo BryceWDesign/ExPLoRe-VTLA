@@ -4,7 +4,7 @@
 
 ExPLoRe repurposes Soft Mixture of Experts (MoE) dispatch weights as **learned, per-patch loss coefficients** for multi-objective masked image modeling. The key mechanism is **loss-coupling**: loss gradients flow through dispatch weights to the router, enabling content-dependent specialization where different patches receive different emphases across training objectives. With ViT-Base + CLIP-B/16 teacher, ExPLoRe reaches **80.6% linear probe** and **85.3% finetuning** accuracy on ImageNet-1K, competitive with state-of-the-art at lower inference FLOPs.
 
-**[Paper](https://arxiv.org/abs/TODO)** | **[MEDiC (no-MoE baseline)](https://github.com/aicip/MEDiC)** | **[MaskDistill-PyTorch](https://github.com/drkostas/MaskDistill-PyTorch)**
+**Paper:** TBD (ECCV 2026) | **[MEDiC (no-MoE baseline)](https://github.com/aicip/MEDiC)** | **[MaskDistill-PyTorch](https://github.com/drkostas/MaskDistill-PyTorch)**
 
 ---
 
@@ -60,16 +60,24 @@ Download ImageNet-1K and organize as:
 └── val/{class_name}/...
 ```
 
-Then edit the `data.train_dir` and `data.val_dir` fields in `configs/pretrain_explore_2exp.yaml` (and `_64exp.yaml`).
+Edit `data.data_path`, `data.train_dir`, and `data.val_dir` in the pretrain YAMLs to point at your dataset root. For values shared across configs (data paths, W&B entity, SLURM defaults), copy `.env.example` to `.env` and edit; the pretrain and smoke scripts source `.env` at startup.
+
+### Cluster / SLURM
+
+The SLURM scripts under `scripts/` do **not** hardcode `--account`, `--qos`, or `--partition`. Pass them on the sbatch command line (or via a wrapper script):
+
+```bash
+sbatch --account=YOUR_ACCT --qos=YOUR_QOS --partition=YOUR_PART scripts/pretrain.sh configs/pretrain_explore_2exp.yaml
+```
 
 ---
 
 ## Reproducing the paper
 
-### Smoke test (validate setup works, ~30 min on 1 GPU)
+### Smoke test (validate setup works, ~15 min on 1 GPU)
 
 ```bash
-sbatch scripts/smoke_train_real.sh configs/pretrain_explore_smoke.yaml
+sbatch --account=A --qos=Q --partition=P scripts/smoke_train_real.sh configs/pretrain_explore_smoke.yaml
 ```
 
 This trains the 2-expert model for 2 epochs on a 10-image-per-class subset and verifies all losses, dispatch routing, and checkpoint I/O work end-to-end.
