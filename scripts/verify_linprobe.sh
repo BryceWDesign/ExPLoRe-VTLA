@@ -9,7 +9,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=0-01:00:00
+#SBATCH --time=0-04:00:00
 #SBATCH --output=logs/verify/linprobe_%j.out
 #SBATCH --error=logs/verify/linprobe_%j.err
 
