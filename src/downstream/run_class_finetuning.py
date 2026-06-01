@@ -567,7 +567,11 @@ def main(args, ds_init):
     use_shared_rel_pos_bias = False  # Default value
     if args.finetune:
         checkpoint_folder = os.path.dirname(args.finetune)
-        config_files = glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
+        # Match both config_*.yaml (MEDiC_torch) and pretrain_*.yaml (ExPLoRe) conventions
+        config_files = (
+            glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
+            + glob.glob(os.path.join(checkpoint_folder, "pretrain_*.yaml"))
+        )
         if config_files:
             config_path = config_files[0]
             with open(config_path, 'r') as f:

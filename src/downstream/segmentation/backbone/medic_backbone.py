@@ -78,7 +78,11 @@ class MEDiC(nn.Module):
             return {}
 
         checkpoint_folder = os.path.dirname(pretrained_path)
-        config_files = glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
+        # Match both config_*.yaml (MEDiC_torch) and pretrain_*.yaml (ExPLoRe) conventions
+        config_files = (
+            glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
+            + glob.glob(os.path.join(checkpoint_folder, "pretrain_*.yaml"))
+        )
 
         if not config_files:
             print(f"Warning: No config file found in {checkpoint_folder}")
