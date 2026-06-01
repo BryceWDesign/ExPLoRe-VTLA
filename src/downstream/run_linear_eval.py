@@ -210,10 +210,16 @@ def eval_linear(args):
     # CRITICAL: This ensures model architecture matches checkpoint
     use_moe = False
     moe_cfg = {}
+    student_cfg = {}  # default if no checkpoint config is found
     use_abs_pos_emb = args.abs_pos_emb  # Default from args
     use_rel_pos_bias = args.rel_pos_bias  # Default from args
+    use_shared_rel_pos_bias = args.rel_pos_bias  # Default from args
     checkpoint_folder = os.path.dirname(args.pretrained_weights)
-    config_files = glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
+    # Match both config_*.yaml (ExPLoRe convention) and pretrain_*.yaml (MEDiC convention)
+    config_files = (
+        glob.glob(os.path.join(checkpoint_folder, "config_*.yaml"))
+        + glob.glob(os.path.join(checkpoint_folder, "pretrain_*.yaml"))
+    )
     if config_files:
         config_path = config_files[0]
         with open(config_path, 'r') as f:
