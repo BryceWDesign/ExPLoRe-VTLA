@@ -118,3 +118,41 @@ def test_higher_expert_count():
     out, w = moe(x, return_weights=True)
     assert out.shape == (B, N, D)
     assert w["dispatch"].shape == (B, N, 64)
+
+
+def test_expert_dropout_default_is_off():
+    """ExD defaults to 0.0; train-mode output is deterministic given fixed input."""
+    moe = SoftMoELayer(dim=D, num_experts=4, slots_per_expert=1)
+    assert moe.expert_dropout_p == 0.0
+    moe.train()
+    x = torch.randn(B, N, D)
+    out_a, _ = moe(x, return_weights=False)
+    out_b, _ = moe(x, return_weights=False)
+    assert torch.equal(out_a, out_b), "ExD off should be deterministic per-call"
+
+
+def test_expert_dropout_active_only_in_train():
+    """When p>0, eval mode is a no-op (deterministic); train mode varies across calls."""
+    moe = SoftMoELayer(dim=D, num_experts=4, slots_per_expert=1, expert_dropout_p=0.4)
+    moe.eval()
+    x = torch.randn(B, N, D)
+    out_e1, _ = moe(x, return_weights=False)
+    out_e2, _ = moe(x, return_weights=False)
+    assert torch.equal(out_e1, out_e2), "ExD must be no-op in eval mode"
+
+    moe.train()
+    out_t1, _ = moe(x, return_weights=False)
+    out_t2, _ = moe(x, return_weights=False)
+    # Stochastic: extremely unlikely both calls give the same result for E=4, p=0.4
+    assert not torch.equal(out_t1, out_t2), "ExD in train mode should be stochastic"
+
+
+def test_expert_dropout_gradient_still_flows():
+    """ExD doesn't sever gradient flow back through dispatch."""
+    moe = SoftMoELayer(dim=D, num_experts=4, slots_per_expert=1, expert_dropout_p=0.5)
+    moe.train()
+    x = torch.randn(B, N, D, requires_grad=True)
+    out, _ = moe(x, return_weights=True)
+    out.sum().backward()
+    assert moe.phi.grad is not None
+    assert moe.phi.grad.abs().sum() > 0, "phi must still receive gradient with ExD on"

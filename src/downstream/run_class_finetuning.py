@@ -304,9 +304,16 @@ def get_args():
 
     # MoE finetuning options (based on ST-MoE and FLAN-MoE research)
     # See: https://arxiv.org/abs/2202.08906 (ST-MoE) and FLAN-MoE paper
+    # Paper §4.6.3 Tab 4.7: FR+FA+ExD recipe = +1.5% FT over vanilla MoE
     parser.add_argument('--freeze_moe_routing', action='store_true', default=False,
-                        help='Freeze MoE routing parameters (phi, scale) during finetuning. '
+                        help='Freeze Routing (FR): freeze MoE router params (phi, scale) during finetuning. '
                              'Prevents routing collapse observed when entropy regularization is removed.')
+    parser.add_argument('--freeze_attention', action='store_true', default=False,
+                        help='Freeze Attention (FA): freeze attention QKV + output proj params. '
+                             'Per ST-MoE, pretrained attention encodes transferable visual structure.')
+    parser.add_argument('--expert_dropout', type=float, default=0.0,
+                        help='Expert Dropout (ExD) probability for expert outputs (0=disabled). '
+                             'Paper recommends 0.4 for FR+FA+ExD recipe (Tab 4.7).')
     parser.add_argument('--moe_entropy_weight', type=float, default=0.0,
                         help='Weight for dispatch entropy loss during finetuning (0=disabled). '
                              'Maintains routing diversity. Recommended: 1.0-2.5 (pretraining used 5.0)')
@@ -868,24 +875,50 @@ def main(args, ds_init):
             print(f"{'='*80}\n")
 
     # =========================================================================
-    # MoE ROUTING FREEZE (prevents routing collapse during finetuning)
-    # Evidence: ST-MoE and FLAN-MoE show freezing routing improves finetuning
+    # FR: Freeze Routing — prevents routing collapse during finetuning
+    # Evidence: ST-MoE / FLAN-MoE. Paper §4.6.3 Tab 4.7: FR alone +0.4% FT.
     # =========================================================================
     if args.freeze_moe_routing and use_moe:
         frozen_count = 0
-        frozen_params = []
         for name, param in model.named_parameters():
             if '.phi' in name or '.scale' in name:
                 param.requires_grad = False
                 frozen_count += 1
-                frozen_params.append(name)
         if utils.is_main_process():
-            print(f"{'='*80}")
-            print(f"[MoE Finetuning] Frozen {frozen_count} routing parameters (phi, scale)")
-            print(f"  Rationale: ST-MoE/FLAN-MoE show freezing routing improves finetuning")
-            for p in frozen_params:
-                print(f"    - {p}")
-            print(f"{'='*80}\n")
+            print(f"[FR] Frozen {frozen_count} routing parameters (phi, scale)")
+
+    # =========================================================================
+    # FA: Freeze Attention — preserves pretrained attention patterns
+    # Per ST-MoE; paper §4.6.3 Tab 4.7: FR+FA = +0.5% FT over vanilla.
+    # Targets: qkv projection, attn output projection, relative_position_*
+    # =========================================================================
+    if args.freeze_attention:
+        attn_frozen = 0
+        for name, param in model.named_parameters():
+            # Match BEiT-style and timm-style attention parameter names.
+            if any(tok in name for tok in (
+                '.attn.qkv', '.attn.q_bias', '.attn.v_bias',
+                '.attn.proj', '.attn.relative_position',
+            )):
+                param.requires_grad = False
+                attn_frozen += 1
+        if utils.is_main_process():
+            print(f"[FA] Frozen {attn_frozen} attention parameters (qkv, proj, rel_pos)")
+
+    # =========================================================================
+    # ExD: Expert Dropout — applied to expert outputs inside SoftMoELayer.
+    # Per Switch Transformer; paper §4.6.3 Tab 4.7: ExD adds +0.7% on top of FR.
+    # =========================================================================
+    if args.expert_dropout > 0.0 and use_moe:
+        exd_applied = 0
+        for module in model.modules():
+            # Duck-type the SoftMoE layer by attribute presence to avoid the
+            # cyclic-import drag of `from src.models.soft_moe import SoftMoELayer`.
+            if hasattr(module, 'phi') and hasattr(module, 'num_experts'):
+                module.expert_dropout_p = float(args.expert_dropout)
+                exd_applied += 1
+        if utils.is_main_process():
+            print(f"[ExD] Applied expert_dropout p={args.expert_dropout} to {exd_applied} MoE layers")
 
     model.to(device)
 

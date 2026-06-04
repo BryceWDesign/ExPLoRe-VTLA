@@ -60,12 +60,17 @@ class SoftMoELayer(nn.Module):
         mlp_ratio: float = 4.0,
         act_layer: Callable = nn.GELU,
         drop: float = 0.0,
+        expert_dropout_p: float = 0.0,
     ):
         super().__init__()
         self.dim = dim
         self.num_experts = num_experts
         self.slots_per_expert = slots_per_expert
         self.num_slots = num_experts * slots_per_expert  # Total slots = 2 * 1 = 2
+        # Expert Dropout (ExD), paper §4.6.3 / Switch Transformer JMLR 22.
+        # Applied to per-slot expert outputs during training only (eval = identity).
+        # Can be set after construction by the finetune driver (--expert_dropout flag).
+        self.expert_dropout_p = float(expert_dropout_p)
 
         # Learnable slot parameters Phi [dim, num_slots]
         # These define the "queries" for soft routing
@@ -156,6 +161,17 @@ class SoftMoELayer(nn.Module):
                 output_slots.append(slot_output)
 
         output_slots = torch.stack(output_slots, dim=1)  # [B, num_slots, D]
+
+        # Expert Dropout (ExD): randomly zero entire slot outputs during training
+        # so the combine step cannot rely on any single expert.
+        # No-op when self.expert_dropout_p == 0.0 (the default) or in eval mode.
+        if self.training and self.expert_dropout_p > 0.0:
+            keep_prob = 1.0 - self.expert_dropout_p
+            mask = torch.empty(
+                output_slots.shape[0], output_slots.shape[1], 1,
+                device=output_slots.device, dtype=output_slots.dtype,
+            ).bernoulli_(keep_prob)
+            output_slots = output_slots * mask / keep_prob
 
         # 6. Combine: aggregate slots back to tokens using LEARNED weights
         output = torch.einsum('bns,bsd->bnd', combine_weights, output_slots)
